@@ -733,7 +733,7 @@ export default function ClientsView({ onEdit, onDuplicate, onNew }) {
       <div className="glass-panel p-4 mb-6">
         <div className="search-box" style={{ maxWidth: '400px' }}>
           <Search size={16} className="search-icon" />
-          <input type="text" placeholder="Search clients..." value={search}
+          <input data-shortcut-search aria-keyshortcuts="F3" type="text" placeholder="Search clients..." value={search}
             onChange={e => setSearch(e.target.value)} className="search-input" />
           {search && <button className="icon-btn" onClick={() => setSearch('')}><X size={14} /></button>}
         </div>

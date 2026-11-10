@@ -256,7 +256,7 @@ export default function InventoryView() {
       <div className="glass-panel p-4 mb-6">
         <div className="search-box" style={{ maxWidth: '400px' }}>
           <Search size={16} className="search-icon" />
-          <input type="text" placeholder="Search by name or HSN..." value={search}
+          <input data-shortcut-search aria-keyshortcuts="F3" type="text" placeholder="Search by name or HSN..." value={search}
             onChange={e => setSearch(e.target.value)} className="search-input" disabled={bulkEdit}
             title={bulkEdit ? 'Save or cancel the bulk edit first' : undefined} />
           {search && <button className="icon-btn" onClick={() => setSearch('')} title="Clear search" aria-label="Clear search"><X size={14} /></button>}

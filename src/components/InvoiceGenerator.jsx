@@ -1,3 +1,4 @@
+import { matchShortcut, hasShortcutDialog } from '../utils/keyboardShortcuts';
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { Maximize2, ArrowLeft, Plus, Trash2, Download, UserPlus, Pencil, Settings, ChevronUp, ChevronDown, MessageCircle, Check, Loader, Truck, Printer, Eye, EyeOff, QrCode } from 'lucide-react';
 import { jsPDF } from 'jspdf';
@@ -1208,6 +1209,12 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   // "Cancel = discard" hit Cancel expecting to leave) to a proper 3-option
   // modal. Modal state below; handleBack just opens it.
   const [leaveModal, setLeaveModal] = useState(false);
+  const shortcutDestination = useRef(null);
+  const finishLeaving = () => {
+    const run = shortcutDestination.current;
+    shortcutDestination.current = null;
+    if (run) run(); else onBack();
+  };
   const handleBack = () => {
     // v1.10.22 — use isDirty (real change tracking) instead of
     // autoSaveStatus. autoSaveStatus starts at 'idle' on mount and only
@@ -1218,7 +1225,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
       return;
     }
     clearDraft();
-    onBack();
+    finishLeaving();
   };
 
   const leaveActions = {
@@ -1230,7 +1237,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
         toast('Invoice saved', 'success');
         clearDraft();
         setLeaveModal(false);
-        onBack();
+        finishLeaving();
       } catch {
         toast('Save failed — staying on the page so you can retry', 'error');
       }
@@ -1238,9 +1245,9 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     discardAndExit: () => {
       clearDraft();
       setLeaveModal(false);
-      onBack();
+      finishLeaving();
     },
-    cancel: () => setLeaveModal(false),
+    cancel: () => { shortcutDestination.current = null; setLeaveModal(false); },
   };
 
   useEffect(() => {
@@ -1255,6 +1262,17 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [isMeaningfulInvoice]);
+
+  useEffect(() => {
+    const navigate = event => {
+      event.preventDefault();
+      shortcutDestination.current = event.detail.run;
+      if (isDirty.current) setLeaveModal(true);
+      else handleBack();
+    };
+    window.addEventListener('fgsb:shortcut-navigate', navigate);
+    return () => window.removeEventListener('fgsb:shortcut-navigate', navigate);
+  });
 
   const clearDraft = () => {
     sessionStorage.removeItem('gst_invoiceDraft');
@@ -3147,51 +3165,35 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     return pdf;
   };
 
-  // Per-view keyboard shortcuts.
-  //   Ctrl/Cmd+S       — save invoice (no PDF) if meaningful
-  //   Ctrl/Cmd+P       — download PDF
-  //   Ctrl/Cmd+Enter   — add a new line item (v1.10.22)
-  //   Ctrl/Cmd+Shift+D — duplicate the LAST line item (v1.10.22)
-  //   Esc              — close the leave-guard modal (v1.10.22)
+  // Use the same catalogue as the help screen; never act behind a dialog.
+  const shortcutBusy = useRef(false);
   useEffect(() => {
-    const onKey = (e) => {
-      // Esc closes the leave modal without needing Ctrl.
-      if (e.key === 'Escape' && leaveModal) {
-        e.preventDefault();
-        setLeaveModal(false);
+    const onKey = async (e) => {
+      const shortcut = matchShortcut(e, 'Invoice');
+      if (!shortcut || hasShortcutDialog()) return;
+      e.preventDefault();
+      if (saving || shortcutBusy.current || (readOnlyDoc && shortcut.id !== 'pdf')) return;
+      if (shortcut.id === 'add') { isDirty.current = true; addItem(); return; }
+      if (shortcut.id === 'duplicate') {
+        isDirty.current = true;
+        setItems(prev => prev.length ? [...prev, { ...prev[prev.length - 1], id: crypto.randomUUID() }] : prev);
         return;
       }
-      const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
-      if (e.key === 's' || e.key === 'S') {
-        if (!isMeaningfulInvoice()) return; // nothing to save
-        e.preventDefault();
-        saveInvoiceToDB().then(async (no) => { if (no) { toast('Invoice saved', 'success'); await refreshSavedPdf(no); } }).catch(() => toast('Save failed', 'error'));
-      } else if (e.key === 'p' || e.key === 'P') {
-        e.preventDefault();
-        // Defer to the next tick so the keydown doesn't race the PDF render.
-        setTimeout(() => generatePDF(), 0);
-      } else if (e.key === 'Enter') {
-        // Add a new line item. Doesn't fire when the user is inside a form
-        // element that should get Enter (rich-text editor autofocus etc.) —
-        // browsers dispatch Ctrl+Enter to the row-level input which won't
-        // preventDefault by itself.
-        e.preventDefault();
-        addItem();
-      } else if (e.shiftKey && (e.key === 'd' || e.key === 'D')) {
-        // Duplicate the last item — quick win for "same item, next line".
-        e.preventDefault();
-        setItems(prev => {
-          if (prev.length === 0) return prev;
-          const last = prev[prev.length - 1];
-          return [...prev, { ...last, id: Date.now().toString() }];
-        });
-      }
+      shortcutBusy.current = true;
+      try {
+        if (shortcut.id === 'save' && isMeaningfulInvoice()) {
+          const no = await saveInvoiceToDB();
+          if (no) { toast('Invoice saved', 'success'); await refreshSavedPdf(no); }
+        } else if (shortcut.id === 'pdf') {
+          await generatePDF();
+        }
+      } catch {
+        toast(shortcut.id === 'pdf' ? 'PDF failed' : 'Save failed', 'error');
+      } finally { shortcutBusy.current = false; }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMeaningfulInvoice, leaveModal]);
+  });
 
   // v1.10.3 — Shared print-via-iframe helper. Prior code duplicated the
   // "createObjectURL + iframe + revoke on load" pattern in 3 places and
@@ -3624,7 +3626,10 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   };
 
   return (
-    <div className="generator-container">
+    <div className="generator-container" onInputCapture={() => {
+      // Track user edits even during the initial loading grace period.
+      if (!readOnlyDoc) isDirty.current = true;
+    }}>
       {readOnlyDoc && (
         <div className="notice notice-info" role="status" style={{ marginBottom: '0.75rem' }}>
           {editingBill.convertedTo

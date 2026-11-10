@@ -1300,7 +1300,7 @@ export default function PurchaseBills() {
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <div className="search-box" style={{ maxWidth: '300px' }}>
             <Search size={16} className="search-icon" />
-            <input type="text" placeholder="Search supplier, invoice..." value={search}
+            <input data-shortcut-search aria-keyshortcuts="F3" type="text" placeholder="Search supplier, invoice..." value={search}
               onChange={e => setSearch(e.target.value)} className="search-input" />
           </div>
           <select className="filter-select" value={fyFilter} onChange={e => setFyFilter(e.target.value)}>

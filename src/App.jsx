@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
+import { SHORTCUTS, shortcutLabel, matchShortcut, isEditingField, hasShortcutDialog, requestShortcutNavigation } from './utils/keyboardShortcuts';
+import { useState, useEffect, useRef, useMemo, lazy, Suspense, Fragment as ReactFragment } from 'react';
 import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, HelpCircle, Search, Command, Bell, Calculator, HardDrive, Menu, Heart, Banknote } from 'lucide-react';
 import { getAllProfiles, saveProfile, getEnabledModules, getMenuOrder, onMenuChanged, getAllBills, getAllProducts, getStockAlertSettings, getAllClients, runUpdateNow, getLockStatus } from './store';
 import { isModuleEnabled, getUpcomingFilings, countsAsSales, localToday, toLocalIsoDate, DOCS_URL, findLowStock, trackedStock } from './utils';
@@ -605,11 +606,11 @@ function App() {
   // ReferenceError ("Cannot access 'X' before initialization") at runtime.
   const paletteActions = useMemo(() => {
     const acts = [
-      { label: 'New Invoice', hint: 'Ctrl+N', category: 'action', run: () => { handleNewInvoice(); } },
+      { label: 'New Invoice', hint: 'F8', category: 'action', run: () => { handleNewInvoice(); } },
     ];
     navItems.forEach(item => {
       if (item.id === 'new') return; // already covered above
-      acts.push({ label: `Go to ${item.label}`, hint: '', category: 'nav', run: item.onClick || (() => setCurrentView(item.id)) });
+      acts.push({ label: `Go to ${item.label}`, hint: SHORTCUTS.find(s => s.id === item.id)?.keys[0] || '', category: 'nav', run: item.onClick || (() => setCurrentView(item.id)) });
     });
     acts.push({ label: 'Go to Settings', hint: '', category: 'nav', run: () => setCurrentView('settings') });
     // v1.10.74 - Control Panel has its own sidebar button but was missing here.
@@ -679,42 +680,57 @@ function App() {
     settingsJumps.forEach(([s, sectionId]) => {
       acts.push({ label: `⚙️ Settings → ${s}`, hint: '', category: 'settings', run: () => openSettingsAt(sectionId) });
     });
-    return acts;
+    return acts.map(action => {
+      const navigates = ['nav', 'settings', 'invoice', 'client', 'product'].includes(action.category) || action.label === 'New Invoice';
+      return navigates ? { ...action, run: () => requestShortcutNavigation(action.run) } : action;
+    });
   }, [navItems, bottomIds, topIds, updateInfo, handleNewInvoice, searchCorpus]);
 
   const filteredPalette = paletteActions.filter(a =>
     !paletteQuery.trim() || a.label.toLowerCase().includes(paletteQuery.toLowerCase())
   );
 
-  // Global keyboard shortcuts. Lives down here for the same TDZ reason —
-  // the handler closes over `handleNewInvoice` which is declared above only.
+  // Navigation is disabled while typing; dialogs own their keyboard events.
   useEffect(() => {
     const onKey = (e) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
-      const tag = (e.target?.tagName || '').toLowerCase();
-      const editable = tag === 'input' || tag === 'textarea' || e.target?.isContentEditable;
-      if (e.key === 'k' || e.key === 'K') {
+      const shortcut = matchShortcut(e);
+      if (!shortcut || shortcut.group === 'Invoice') return;
+      if (showShortcutsHelp && shortcut.id === 'help') {
+        e.preventDefault(); setShowShortcutsHelp(false); return;
+      }
+      if (showPalette && shortcut.id === 'palette') {
+        e.preventDefault(); setShowPalette(false); return;
+      }
+      if (showWizard || hasShortcutDialog()) return;
+      if (shortcut.module && !isModuleEnabled(shortcut.module, enabledModules)) return;
+      if (shortcut.group === 'Navigation') {
+        if (isEditingField(e.target)) return;
         e.preventDefault();
-        setShowPalette(p => !p);
-        setPaletteQuery('');
-        setPaletteIdx(0);
-      } else if (e.key === '/') {
+        if (shortcut.id === currentView && shortcut.id !== 'new') return;
+        requestShortcutNavigation(() => {
+          setNavOpen(false);
+          if (shortcut.id === 'new') handleNewInvoice();
+          else setCurrentView(shortcut.id);
+        });
+        return;
+      }
+      if (shortcut.id === 'search') {
+        const fields = [...document.querySelectorAll('.main-content input[data-shortcut-search]')];
+        const field = fields.find(el => !el.disabled && el.getClientRects().length);
+        if (!field) return;
+        e.preventDefault(); field.focus(); field.select();
+      } else if (shortcut.id === 'palette') {
+        e.preventDefault(); setShowPalette(true); setPaletteQuery(''); setPaletteIdx(0);
+      } else if (shortcut.id === 'help') {
+        e.preventDefault(); setShowShortcutsHelp(true);
+      } else if (shortcut.id === 'lock') {
         e.preventDefault();
-        setShowShortcutsHelp(s => !s);
-      } else if ((e.key === 'l' || e.key === 'L') && e.shiftKey) {
-        // v1.10.80 (#98) - lock now; does nothing when no PIN is set.
-        e.preventDefault();
-        getLockStatus().then((st) => { if (st?.enabled) lockNow(); }).catch(() => {});
-      } else if ((e.key === 'n' || e.key === 'N') && !editable) {
-        e.preventDefault();
-        handleNewInvoice();
+        getLockStatus().then(st => { if (st?.enabled) lockNow(); }).catch(() => {});
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
 
   // v1.9.4 — Accessibility hooks (v1.10.4/1.10.6 updated):
   //   1. Mirror `title` → `aria-label` on every icon button that lacks one.
@@ -896,7 +912,8 @@ function App() {
         </button>
         <span className="mobile-topbar-title">GST Billing</span>
         <span className="mobile-topbar-business">{profile?.businessName || ''}</span>
-        {topActions}
+        <button type="button" className="topbar-btn" onClick={() => setShowShortcutsHelp(true)} title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts"><Command size={18} /></button>
+          {topActions}
       </div>
       {navOpen && <div className="sidebar-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
       <div className={`sidebar${navOpen ? ' sidebar-open' : ''}`} onClick={closeNavAfterPick}>
@@ -1049,6 +1066,7 @@ function App() {
         <div className="app-topbar">
           {/* v1.10.83 - the promise, on every screen (it was under the app name in the menu). */}
           <span className="topbar-free" title="Free forever: no paid version, no locked features, no ads, no tracking. Works on this computer, even offline.">Free forever</span>
+          <button type="button" className="topbar-btn" onClick={() => setShowShortcutsHelp(true)} title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts"><Command size={18} /></button>
           {topActions}
         </div>
         {/* v1.10.83 - a screen that throws shows "ran into a problem" here
@@ -1125,7 +1143,7 @@ function App() {
           tablets too. Grouped by category with a navigate-to button per group. */}
       {showNotifs && (
         <div className="modal-overlay" onClick={() => setShowNotifs(false)}>
-          <div className="modal-content" style={{ maxWidth: '480px' }} onClick={e => e.stopPropagation()}>
+          <div className="modal-content" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" style={{ maxWidth: '640px', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
               <h3 className="section-title" style={{ margin: 0 }}>Notifications <HelpButton title="Notifications" doc="shortcuts#notifications" size={16} /></h3>
               <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -1260,24 +1278,27 @@ function App() {
       {/* Keyboard-shortcuts help — Ctrl/Cmd+/. Single-pane reference. */}
       {showShortcutsHelp && (
         <div className="modal-overlay" onClick={() => setShowShortcutsHelp(false)}>
-          <div className="modal-content" style={{ maxWidth: '480px' }} onClick={e => e.stopPropagation()}>
+          <div className="modal-content" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" style={{ maxWidth: '640px', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <h3 className="section-title" style={{ margin: 0 }}>Keyboard Shortcuts <HelpButton title="Keyboard shortcuts" doc="shortcuts#keyboard" size={16} /></h3>
               <button className="icon-btn" onClick={() => setShowShortcutsHelp(false)} title="Close"><X size={18} /></button>
             </div>
             <table className="kv-list">
               <tbody>
-                <tr><td><kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>K</kbd></td><td>Open command palette (jump to any page)</td></tr>
-                <tr><td><kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>N</kbd></td><td>New invoice</td></tr>
-                <tr><td><kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>S</kbd></td><td>Save current invoice (when on the invoice form)</td></tr>
-                <tr><td><kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>P</kbd></td><td>Download PDF (when on the invoice form)</td></tr>
-                <tr><td><kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>Shift</kbd>&nbsp;+&nbsp;<kbd>L</kbd></td><td>Lock the app (when a PIN is set)</td></tr>
-                <tr><td><kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>/</kbd></td><td>Toggle this help</td></tr>
-                <tr><td><kbd>Esc</kbd></td><td>Close any open modal</td></tr>
+                {['General', 'Navigation', 'Invoice'].map(group => (
+                  <ReactFragment key={group}>
+                    <tr><th colSpan={2} style={{ textAlign: 'left', paddingTop: 12 }}>{group}</th></tr>
+                    {SHORTCUTS.filter(s => s.group === group && (!s.module || showIfModule(s.module))).map(s => (
+                      <tr key={s.id}><td><kbd>{shortcutLabel(s)}</kbd></td><td>{s.label}</td></tr>
+                    ))}
+                  </ReactFragment>
+                ))}
+                <tr><td><kbd>Tab / Shift+Tab</kbd></td><td>Next / previous field</td></tr>
+                <tr><td><kbd>Esc</kbd></td><td>Close dialog</td></tr>
               </tbody>
             </table>
             <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.75rem', marginBottom: 0 }}>
-              On macOS, use <kbd>⌘</kbd> instead of <kbd>Ctrl</kbd>.
+              Navigation shortcuts work outside typing fields. Invoice shortcuts work only in the invoice editor. On laptops, function keys may require Fn. On macOS, use <kbd>⌘</kbd> instead of <kbd>Ctrl</kbd>.
             </p>
           </div>
         </div>

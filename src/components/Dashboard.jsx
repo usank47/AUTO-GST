@@ -1670,7 +1670,7 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
         <div className="filters-bar">
           <div className="search-box">
             <Search size={16} className="search-icon" />
-            <input type="text" placeholder="Search client, invoice, order no, AWB, phone..." value={search}
+            <input data-shortcut-search aria-keyshortcuts="F3" type="text" placeholder="Search client, invoice, order no, AWB, phone..." value={search}
               onChange={e => setSearch(e.target.value)} className="search-input" />
           </div>
           {/* v1.10.84 - in the Trash tab only the search applies. */}
