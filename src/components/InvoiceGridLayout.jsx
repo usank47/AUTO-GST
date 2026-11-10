@@ -275,7 +275,7 @@ function TallyLayout({ ctx }) {
           {extraRef.length > 0 && (
             <tr {...blockProps}>
               <td style={cell} colSpan={2}>
-                {extraRef.map(([k, v]) => <div key={k}><span style={small}>{k}: </span><strong>{v}</strong></div>)}
+                {extraRef.map(([k, v], i) => <div key={`${k}-${i}`}><span style={small}>{k}: </span><strong>{v}</strong></div>)}
               </td>
             </tr>
           )}
@@ -441,7 +441,7 @@ function BoxedLayout({ ctx }) {
               <td style={{ ...cell, borderLeft: 'none', borderTop: 'none', width: '55%' }}><SellerBlock ctx={{ ...ctx, t: { ...t, logo: false } }} /></td>
               <td style={{ ...cell, borderRight: 'none', borderTop: 'none', padding: 0 }}>
                 {metaRows.map(([k, v], i) => (
-                  <div key={k} style={{ padding: '4px 6px', borderTop: i ? B : 'none' }}><span style={label}>{k}:</span> {v}</div>
+                  <div key={`${k}-${i}`} style={{ padding: '4px 6px', borderTop: i ? B : 'none' }}><span style={label}>{k}:</span> {v}</div>
                 ))}
               </td>
             </tr>

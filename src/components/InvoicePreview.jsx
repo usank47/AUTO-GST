@@ -17,7 +17,7 @@ import { sizeLabel, sizePieces, lineSqft, sizeHasDims } from '../utils/glass';
 // instance renders with previewOnly=true so it doesn't create a
 // duplicate id on the page — HTML-invalid + could confuse getElementById
 // lookups.
-const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details, items, totals, invoiceType = 'tax-invoice', customTerms, customNotes, extraSections = [], options = {}, previewOnly = false, cancelled = false, einvoice = null }, ref) => {
+const InvoicePreview = React.forwardRef(function InvoicePreview({ profile: profileProp, client, details, items, totals, invoiceType = 'tax-invoice', customTerms, customNotes, extraSections = [], options = {}, previewOnly = false, cancelled = false, einvoice = null }, ref) {
   // v1.10.76 - the business profile can still be loading on the first render
   // (a page refresh while editing an invoice), and reading a bank field from
   // null blanked the whole app. Empty until it arrives.
@@ -1188,8 +1188,8 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
       {orderDetails.length > 0 && (
         <div className="inv-parties inv-order-details" data-pdf-page-boundary=""
           style={{ margin: pdfStyle === 'classic' ? '0 0 0.75rem' : '0 2rem 0.75rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: '0.25rem 1rem', fontSize: '0.75rem' }}>
-          {orderDetails.map((f) => (
-            <div key={f.key} style={f.wide ? { gridColumn: '1 / -1' } : undefined}>
+          {orderDetails.map((f, idx) => (
+            <div key={f.key ?? idx} style={f.wide ? { gridColumn: '1 / -1' } : undefined}>
               <span style={{ color: '#475569' }}>{f.label}: </span><strong>{f.value}</strong>
             </div>
           ))}
@@ -1283,7 +1283,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
             const halfRate = taxRate / 2;
             const halfTax = taxAmount / 2;
             return (
-              <tr key={item.id} className={index % 2 === 0 ? 'inv-tr-even' : ''}>
+              <tr key={item.id ?? index} className={index % 2 === 0 ? 'inv-tr-even' : ''}>
                 <td className="inv-td inv-td-muted">{index + 1}</td>
                 <td className="inv-td inv-td-name">
                   {item.name || '-'}
@@ -1531,8 +1531,8 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
                   account?.iban && ['IBAN', account.iban],
                   purposeCode && ['Purpose code', purposeCodeText(purposeCode)],
                   profile.pan && isIndia && ['PAN', profile.pan],
-                ].filter(Boolean).map(([label, value]) => (
-                  <React.Fragment key={label}>
+                ].filter(Boolean).map(([label, value], idx) => (
+                  <React.Fragment key={`${label}-${idx}`}>
                     <span className="inv-detail-label">{label}</span>
                     <p>{value}</p>
                   </React.Fragment>
@@ -1653,7 +1653,7 @@ const InvoicePreview = React.forwardRef(({ profile: profileProp, client, details
         // v1.10.74 - dropped "Page N of M": M assumed a one-page invoice, so it
         // was wrong whenever the invoice itself ran longer.
         return filtered.map((section, idx) => (
-          <div key={section.id} className="inv-extra-page" data-pdf-page={idx + 2}>
+          <div key={section.id ?? idx} className="inv-extra-page" data-pdf-page={idx + 2}>
             <div className="inv-extra-page-header">
               <div>
                 <span className="inv-extra-ref">{customTitle} — {details?.invoiceNumber}</span>

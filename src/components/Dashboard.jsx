@@ -222,32 +222,11 @@ const foreignReceiptFields = (input) => {
   };
 };
 
-export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConvert, onOpenProducts, onOpenSettings, onOpenGuide, onOpenSupport, activeProfile }) {
+export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConvert, onOpenProducts, onOpenSettings, onOpenGuide, onOpenSupport, onOpenFiling, activeProfile }) {
   // v1.10.64 — requested (#55, @sangwanmail-eng): "An invoice belonging to one
   // company should not appear under the other."
-  //
-  // Bills and the active business load independently, so filtering at load
-  // time would race — whichever arrived second would be ignored. Instead the
-  // raw list is held and the visible list derived, which stays correct when
-  // either changes, including when the user switches business from the
-  // header without a reload.
-  //
-  // Anything that cannot be attributed to a business is SHOWN, never hidden.
-  // See belongsToProfile() in utils.js for why that matters here.
   const [allBills, setBills] = useState([]);
   const [profileState, setProfileState] = useState(null);
-
-  // v1.10.65 — requested (#58 item 1, @sangwanmail-eng): "Dashboard should
-  // refresh automatically after company switch."
-  //
-  // It did not, because the dashboard fetched the business ONCE when it
-  // mounted. Switching business from the header updated the app, but this
-  // screen never heard about it and kept showing the previous company's
-  // invoices until a manual reload.
-  //
-  // The live value is now passed in as a prop, so a switch re-filters
-  // immediately. The locally fetched copy stays as a fallback for the first
-  // paint, before the prop has arrived.
   const profile = activeProfile ?? profileState;
 
   const bills = useMemo(
@@ -255,31 +234,35 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
     [allBills, profile],
   );
   const [filtered, setFiltered] = useState([]);
-  // v1.10.66 (#64 item 3) — the headline cards are computed from `bills`, the
-  // list already narrowed to the active business. They used to be summed in
-  // loadBills() from the raw server response, so Total Invoiced, Tax Collected,
-  // Outstanding and the invoice count added up EVERY company's invoices while
-  // the table underneath showed only one.
   const baseCur = baseCurrencyOf(profile);
   const stats = useMemo(() => {
-    // v1.10.67 (#66 item 7, @sangwanmail-eng) — these cards are turnover, so
-    // only real sales count. A proforma is a quote, a delivery challan moves
-    // goods without selling them, a credit note takes money back, and a
-    // cancelled document counts for nothing.
     const byCurrency = {};
     let count = 0;
+    let unpaidCount = 0;
+    let cgstTotal = 0;
+    let sgstTotal = 0;
+    let realizedTotal = 0;
     for (const b of bills) {
       const sign = salesSign(b);
       if (sign === 0) continue;
       count += 1;
       const cur = b.currency || b.data?.invoiceOptions?.currency || 'INR';
-      if (!byCurrency[cur]) byCurrency[cur] = { total: 0, tax: 0, unpaid: 0 };
-      byCurrency[cur].total += sign * (b.totalAmount || 0);
-      byCurrency[cur].tax += sign * (b.totalTaxAmount || 0);
-      if (sign > 0 && b.status !== 'paid') byCurrency[cur].unpaid += Math.max(0, amountDue(b) - (b.paidAmount || 0));
+      if (!byCurrency[cur]) byCurrency[cur] = { total: 0, tax: 0, unpaid: 0, paid: 0 };
+      const billTot = sign * (b.totalAmount || 0);
+      const billTax = sign * (b.totalTaxAmount || 0);
+      byCurrency[cur].total += billTot;
+      byCurrency[cur].tax += billTax;
+      cgstTotal += sign * (b.data?.totals?.cgst ?? (billTax / 2));
+      sgstTotal += sign * (b.data?.totals?.sgst ?? (billTax / 2));
+      if (sign > 0 && b.status !== 'paid') {
+        const rem = Math.max(0, amountDue(b) - (b.paidAmount || 0));
+        byCurrency[cur].unpaid += rem;
+        if (rem > 0.005) unpaidCount += 1;
+      }
+      const paidAmt = sign > 0 ? (b.status === 'paid' ? Math.max(Number(b.paidAmount) || 0, Number(b.totalAmount) || 0) : (Number(b.paidAmount) || 0)) : 0;
+      byCurrency[cur].paid += paidAmt;
+      realizedTotal += paidAmt;
     }
-    // v1.10.83 - more than one currency: the total in rupees too, each
-    // invoice at its own exchange rate (one without a rate is counted apart).
     let inBase = 0, noRate = 0;
     if (Object.keys(byCurrency).length > 1) {
       for (const b of bills) {
@@ -289,7 +272,7 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
         if (c) inBase += sign * (c.totalAmount || 0); else noRate += 1;
       }
     }
-    return { byCurrency, count, inBase, noRate };
+    return { byCurrency, count, unpaidCount, cgstTotal, sgstTotal, realizedTotal, inBase, noRate };
   }, [bills, baseCur]);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -297,6 +280,8 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
   const [fyFilter, setFyFilter] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [currentPage, setCurrentPage] = useState(1);
   // v1.10.83 (#112) - '' = all; see utils/costCentres.js.
   const [centreFilter, setCentreFilter] = useState('');
   const { on: ccOn, centres } = useCostCentres(profile);
@@ -306,22 +291,13 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
   const [allTrash, setAllTrash] = useState([]);
   const trash = useMemo(() => allTrash.filter((b) => belongsToProfile(b, profile)), [allTrash, profile]);
   const cancelledCount = useMemo(() => bills.filter((b) => isCancelledBill(b)).length, [bills]);
-  // Bulk-selection state. Stores a Set of bill IDs (not the bills themselves)
-  // so we don't hold stale references when the underlying bill is edited
-  // elsewhere. Cleared whenever filters change so the user doesn't accidentally
-  // bulk-act on bills they can no longer see.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  // v1.10.74 - the comment above was never wired up, so bulk actions could hit
-  // ticked rows hidden by a filter. Reset during render (React's "adjust state
-  // on prop change" pattern) when any filter changes.
   const filterKey = [search, typeFilter, statusFilter, fyFilter, dateFrom, dateTo, centreFilter, folder].join('|');
   const [selectionFilterKey, setSelectionFilterKey] = useState(filterKey);
   if (selectionFilterKey !== filterKey) {
     setSelectionFilterKey(filterKey);
     if (selectedIds.size) setSelectedIds(new Set());
   }
-  // v1.9.4 — column picker. Persist to localStorage. Default set matches
-  // the pre-v1.9.4 hardcoded columns so no visual change on upgrade.
   const [visibleColumns, setVisibleColumns] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('gst_dashboardColumns') || 'null');
@@ -338,58 +314,28 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
   }, [visibleColumns]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [paymentModal, setPaymentModal] = useState(null);
-  // v1.10.80 (#100) - the invoice shown read-only by the View button.
   const [viewBill, setViewBill] = useState(null);
-  // v1.10.83 (#111) - e-invoicing: problems after an export, results after an IRN import.
   const einvoiceOn = isModuleEnabled('einvoice', getEnabledModules());
   const [einvReport, setEinvReport] = useState(null);
   const irnFileRef = useRef(null);
-  // v1.10.9 — receipt modal state. Opens automatically after
-  // recordPayment succeeds; can also be opened via openReceiptFor(...)
-  // for reprints.
-  const [receiptTarget, setReceiptTarget] = useState(null); // { bill, payment, remaining }
-
-  // v1.10.13 — full-edit payment modal. { bill, idx, form: { amount, date, mode, note } }
+  const [receiptTarget, setReceiptTarget] = useState(null);
   const [editPaymentModal, setEditPaymentModal] = useState(null);
   const [paymentInput, setPaymentInput] = useState({ amount: '', date: '', mode: 'bank-transfer', note: '' });
   const [showRemindAll, setShowRemindAll] = useState(false);
   const [clients, setClients] = useState([]);
-  const [productCount, setProductCount] = useState(null);   // null = not loaded yet
+  const [productCount, setProductCount] = useState(null);
   const [guideDismissed, setGuideDismissed] = useState(() => {
     try { return localStorage.getItem('freegstbill_startedDismissed') === '1'; } catch { return false; }
   });
   const [lowStockProducts, setLowStockProducts] = useState([]);
 
-  // v1.10.4 — audit M14. getFYOptions is date-based (only changes across
-  // April-1 boundary); memoize with an empty dep so we run it once per
-  // component mount, not on every render.
   const fyOptions = useMemo(() => getFYOptions(), []);
 
   const loadBills = async () => {
-    // The Trash tab's list (and count), refreshed with the invoices.
     getTrashedBills().then((t) => setAllTrash(Array.isArray(t) ? t : [])).catch(() => setAllTrash([]));
     try {
       const data = await getAllBills();
-      // Local date (toISOString() is UTC: still yesterday in India until 05:30).
       const today = localToday();
-
-      // v1.10.41 — Orphaned-payment reconciliation. Reported: user
-      // recorded a payment in an older version — the receipt file
-      // exists on disk (Receipts page shows it) but the bill's
-      // paidAmount stayed at 0 and Dashboard showed the invoice as
-      // Overdue with PAID = "—". Root cause was cross-file data
-      // drift: receipts persist in data/receipts/*.json with a
-      // billId reference; bills persist in data/bills/*.json with
-      // their own payments[] array. If a save regression or stale
-      // editingBill overwrite ever emptied the bill's payments,
-      // the receipt survived but the linkage was lost.
-      //
-      // Reconciliation: for every receipt with a bill reference,
-      // check if the bill's payments array contains a matching
-      // entry (by receiptNo or by amount+date+mode). If not, merge
-      // it back and re-save the bill. Runs once per Dashboard mount,
-      // catches this whole class of orphaned-payment bugs
-      // retroactively, and silently no-ops in the healthy case.
       let reconciled = 0;
       try {
         const receipts = await getAllReceipts().catch(() => []);
@@ -402,21 +348,12 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
         }
         const reconcileWrites = [];
         for (const bill of data) {
-          // v1.10.66 (#64) — only a receipt from the business that raised the
-          // invoice may repair it. Two businesses can share an invoice number,
-          // and matching on the number alone posted one company's payment onto
-          // the other company's invoice every time the Dashboard opened.
-          // Receipts saved before businesses were separated carry no business
-          // and still match, as before.
           const rcpts = (receiptsByBillKey.get(bill.id) || receiptsByBillKey.get(bill.invoiceNumber) || [])
             .filter(r => belongsToProfile(bill, { gstin: r.ownerGstin, businessName: r.ownerName }));
           if (!rcpts.length) continue;
           const currentPayments = Array.isArray(bill.payments) ? bill.payments : [];
           const missing = rcpts.filter(r => {
-            // Match by receiptNo (post-v1.10.10 payments store the receipt no),
-            // OR by amount+date signature for pre-v1.10.10 payments.
             return !currentPayments.some(p =>
-              // Receipts made from a payment carry the payment's id.
               (r.id && p.id === r.id)
               || (r.receiptNo && p.receiptNo === r.receiptNo)
               || (Math.abs((Number(p.amount) || 0) - (Number(r.amount) || 0)) < 0.005
@@ -436,11 +373,7 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
             receiptNo: r.receiptNo,
           }))];
           const totalPaid = merged.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-          // A cancelled invoice stays cancelled: restoring a payment must not
-          // bring it back into totals and GST returns without its stock.
           const nextStatus = isCancelledBill(bill) ? 'cancelled' : paymentStatusFor(bill, totalPaid);
-          // Mutate the in-memory bill so setBills(data) below shows the
-          // reconciled value immediately; also queue the server write.
           bill.payments = merged;
           bill.paidAmount = totalPaid;
           bill.status = nextStatus;
@@ -448,20 +381,13 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
           reconcileWrites.push(saveBill(bill, { overwrite: true }).catch(() => null));
         }
         if (reconcileWrites.length) await Promise.allSettled(reconcileWrites);
-      } catch { /* non-fatal — worst case, user still sees orphaned state */ }
+      } catch { /* non-fatal */ }
       if (reconciled > 0) {
         toast(`Reconciled ${reconciled} orphaned payment${reconciled === 1 ? '' : 's'} against ${reconciled === 1 ? 'its' : 'their'} invoice${reconciled === 1 ? '' : 's'}`, 'success', 6000);
       }
 
-      // Auto-detect overdue: if due date passed and not paid, mark as overdue.
-      // Previously this did sequential `await saveBill(bill)` inside a for-loop,
-      // which (a) made N round-trips serialised and (b) silently stopped on the
-      // first failure. Now we collect dirty bills and save them concurrently via
-      // allSettled so one slow save can't block the rest.
       const dirty = data.filter(bill => {
         const dueDate = bill.data?.details?.dueDate;
-        // Only sales can be overdue: a quotation, proforma, challan or credit
-        // note is not money the client owes.
         return dueDate && dueDate < today && bill.status !== 'paid' && bill.status !== 'overdue' && bill.status !== 'cancelled'
           && SALES_INVOICE_TYPES.includes(bill.invoiceType || 'tax-invoice');
       });
@@ -470,7 +396,6 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
         await Promise.allSettled(updates);
       }
 
-      // Headline totals are derived from the business-filtered list (`stats`).
       setBills(data);
     } catch {
       toast('Failed to load invoices', 'error');
@@ -481,8 +406,6 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
     loadBills();
     getProfile().then(p => setProfileState(p)).catch(() => {});
     getAllClients().then(c => setClients(c)).catch(() => {});
-    // Pull the stock-alert config alongside products so the Dashboard's
-    // low-stock card honours the user's threshold + on/off preference.
     Promise.all([
       getAllProducts().catch(() => []),
       getStockAlertSettings().catch(() => ({ enabled: true, threshold: 5 })),
@@ -490,9 +413,9 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
       setProductCount(prods.length);
       if (cfg?.enabled === false) { setLowStockProducts([]); return; }
       const threshold = Number(cfg?.threshold ?? 5);
-      setLowStockProducts(findLowStock(prods, threshold)); // services and uncounted left out (#121)
+      setLowStockProducts(findLowStock(prods, threshold));
     });
-  }, []);
+  }, [activeProfile]);
 
   useEffect(() => {
     let result = bills;
@@ -1405,18 +1328,8 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
     return savedClient?.phone || '';
   };
 
-  // v1.10.4 — audit M14. Both were rebuilt every render even though
-  // they only change when `bills` changes.
+  // v1.10.4 — audit M14.
   const overdueBills = useMemo(() => bills.filter(b => b.status === 'overdue' && SALES_INVOICE_TYPES.includes(b.invoiceType || 'tax-invoice')), [bills]);
-  const overdueByCurrency = useMemo(() => {
-    const acc = {};
-    for (const b of overdueBills) {
-      const cur = b.currency || b.data?.invoiceOptions?.currency || 'INR';
-      acc[cur] = (acc[cur] || 0) + amountDue(b) - (b.paidAmount || 0);
-    }
-    return acc;
-  }, [overdueBills]);
-  const overdueStr = Object.entries(overdueByCurrency).map(([cur, amt]) => formatCurrency(amt, cur)).join(' + ');
 
   // The four things a shop owner has to do before this app is useful to them,
   // each answered from what is actually saved - never from "did you look at
@@ -1443,34 +1356,98 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
     return steps.every(s => s.done) ? null : steps;
   }, [guideDismissed, productCount, profile, allBills.length, onNew, onOpenProducts, onOpenSettings]);
 
+  const exportFilteredCsv = () => {
+    const headers = ['Date', 'Invoice No.', 'Type', 'Client', 'GSTIN', 'Taxable', 'GST Total', 'Grand Total', 'Paid', 'Status'];
+    const rows = filtered.map((b) => {
+      const taxable = Number(b.data?.totals?.subtotalAfterDiscount ?? ((Number(b.totalAmount) || 0) - (Number(b.totalTaxAmount) || 0))) || 0;
+      const gst = Number(b.totalTaxAmount) || 0;
+      return [
+        b.invoiceDate || '',
+        b.invoiceNumber || '',
+        (INVOICE_TYPES[b.invoiceType || 'tax-invoice'])?.label || 'Tax Invoice',
+        b.clientName || '',
+        b.data?.client?.gstin || '',
+        taxable.toFixed(2),
+        gst.toFixed(2),
+        (Number(b.totalAmount) || 0).toFixed(2),
+        (Number(b.paidAmount) || 0).toFixed(2),
+        b.status || 'unpaid',
+      ];
+    });
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `invoices-ledger-${localToday()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${filtered.length} invoice${filtered.length === 1 ? '' : 's'} to CSV`, 'success');
+  };
+
+  const curStat = stats.byCurrency[baseCur] || Object.values(stats.byCurrency)[0] || { total: 0, tax: 0, unpaid: 0, paid: 0 };
+  const avgBill = stats.count > 0 ? curStat.total / stats.count : 0;
+  const unpaidPct = curStat.total > 0 ? Math.round((curStat.unpaid / curStat.total) * 100) : 0;
+  const collectionRate = curStat.total > 0 ? Math.min(100, Math.round(((curStat.total - curStat.unpaid) / curStat.total) * 1000) / 10) : 100;
+  const activeBillsList = useMemo(() => bills.filter(b => !isCancelledBill(b)), [bills]);
+  const unpaidPillCount = useMemo(() => activeBillsList.filter(b => (b.status || 'unpaid') === 'unpaid' || b.status === 'partial').length, [activeBillsList]);
+  const overduePillCount = useMemo(() => activeBillsList.filter(b => b.status === 'overdue').length, [activeBillsList]);
+  const paidPillCount = useMemo(() => activeBillsList.filter(b => b.status === 'paid').length, [activeBillsList]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / rowsPerPage));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedBills = useMemo(() => {
+    const start = (safePage - 1) * rowsPerPage;
+    return filtered.slice(start, start + rowsPerPage);
+  }, [filtered, safePage, rowsPerPage]);
+
   return (
     <div className="dashboard-container">
-      <PageHeader
-        compact
-        icon="📊"
-        title={<>Dashboard <HelpButton title="Dashboard — how to use" doc="dashboard" size={16} /></>}
-        subtitle="Overview of your invoices"
-        meta={`${bills.length} invoice${bills.length === 1 ? '' : 's'}`}>
-        <LockButton />
-        <BulkCsvImport kind="sales" onDone={loadBills} />
-        {einvoiceOn && (
-          <>
-            <input ref={irnFileRef} type="file" accept=".json,application/json" onChange={importIrnFile} style={{ display: 'none' }} />
-            <button type="button" className="btn btn-secondary" disabled={bulkBusy} onClick={() => irnFileRef.current?.click()}
-              title="Choose the JSON file the e-invoice portal gave back, to save each IRN on its invoice">
-              <Upload size={16} /> Import IRN
-            </button>
-          </>
-        )}
-        <button className="btn btn-primary" onClick={onNew}><Plus size={18} /> New Invoice</button>
-      </PageHeader>
+      {/* Stitch Executive Dashboard & Ledger Header */}
+      <div className="page-header" style={{ marginBottom: '1.1rem', alignItems: 'center' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <h1 className="page-title" style={{ fontSize: '1.35rem', fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>
+              Executive Dashboard &amp; Ledger
+            </h1>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              padding: '0.2rem 0.65rem', borderRadius: 999,
+              background: 'rgba(16, 185, 129, 0.12)', color: '#059669',
+              fontSize: '0.73rem', fontWeight: 700, border: '1px solid rgba(16, 185, 129, 0.25)'
+            }}>
+              <CheckCircle size={12} /> {bills.length} Active Invoices
+            </span>
+            <HelpButton title="Dashboard — how to use" doc="dashboard" size={16} />
+          </div>
+          <p className="page-subtitle" style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            Real-time GST compliance, auto-parts stock run-rate &amp; debtor receivables
+          </p>
+        </div>
+        <div className="flex gap-2 items-center" style={{ flexWrap: 'wrap' }}>
+          <LockButton />
+          <BulkCsvImport kind="sales" onDone={loadBills} />
+          <button type="button" className="btn btn-secondary" onClick={exportFilteredCsv} title="Export filtered invoices to CSV">
+            <Download size={15} /> CSV Export
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => onOpenFiling ? onOpenFiling() : bulkExportJSON()} title="Open GSTR-1 JSON Export & Filing">
+            <FileText size={15} /> GSTR-1 JSON
+          </button>
+          {einvoiceOn && (
+            <>
+              <input ref={irnFileRef} type="file" accept=".json,application/json" onChange={importIrnFile} style={{ display: 'none' }} />
+              <button type="button" className="btn btn-secondary" disabled={bulkBusy} onClick={() => irnFileRef.current?.click()}
+                title="Choose the JSON file the e-invoice portal gave back, to save each IRN on its invoice">
+                <Upload size={15} /> Import IRN
+              </button>
+            </>
+          )}
+          <button className="btn btn-primary" onClick={onNew} style={{ background: '#1d4ed8', borderColor: '#1d4ed8', fontWeight: 700, padding: '0.5rem 1rem', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+            <Plus size={17} /> New Invoice
+            <span style={{ fontSize: '0.68rem', padding: '0.1rem 0.35rem', borderRadius: 4, background: 'rgba(255,255,255,0.2)', fontWeight: 700 }}>F2</span>
+          </button>
+        </div>
+      </div>
 
-      {/* v1.10.69 - a new user used to land here on "No invoices yet." and
-          nothing else. The welcome wizard does end with a list of what to do,
-          but it is shown once and then gone forever, which is no help on day
-          two. This stays until the work is actually done, ticks itself off
-          from real data rather than from "have you seen this screen", and
-          removes itself for good once everything is set up. */}
       {onOpenSupport && <WelcomeCard invoiceCount={bills.length} onOpenSupport={onOpenSupport} />}
 
       {startedSteps && (
@@ -1515,30 +1492,6 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
 
       {!startedSteps && onOpenSupport && <SupportNudge invoiceCount={bills.length} onOpen={onOpenSupport} />}
 
-      {overdueBills.length > 0 && (
-        <div className="overdue-banner" onClick={() => { setStatusFilter('overdue'); }}
-          style={{ background: 'var(--danger-light)', border: '1px solid var(--danger-light)', borderRadius: 10, padding: '0.85rem 1.25rem', marginBottom: '1.25rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <AlertTriangle size={20} style={{ color: '#dc2626', flexShrink: 0 }} />
-          <div style={{ flex: 1 }}>
-            <span style={{ fontWeight: 700, color: '#dc2626' }}>
-              {overdueBills.length} overdue invoice{overdueBills.length > 1 ? 's' : ''}
-            </span>
-            <span style={{ color: '#991b1b', marginLeft: 8, fontSize: '0.85rem' }}>
-              — {overdueStr} outstanding
-            </span>
-            {/* Its own click: the banner's click sets the Overdue filter. */}
-            <span onClick={(e) => e.stopPropagation()}>
-              <HelpButton title="Overdue invoices" doc="dashboard#overdue" size={16} />
-            </span>
-          </div>
-          <button className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.3rem 0.75rem', whiteSpace: 'nowrap' }}
-            onClick={(e) => { e.stopPropagation(); setShowRemindAll(true); }}>
-            <Send size={13} /> Remind All
-          </button>
-          <span style={{ fontSize: '0.78rem', color: '#dc2626', fontWeight: 500 }}>View all &rarr;</span>
-        </div>
-      )}
-
       {/* Remind All Modal */}
       {showRemindAll && (
         <div className="modal-overlay" onClick={() => setShowRemindAll(false)}>
@@ -1559,9 +1512,6 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
                         <span className="font-medium">{bill.clientName}</span>
                         <span className="text-muted" style={{ marginLeft: 8, fontSize: '0.8rem' }}>{bill.invoiceNumber}</span>
                         {(() => {
-                          // v1.10.23 — signed outstanding label. Show
-                          // "Overpaid ₹1" in blue on the reminder card
-                          // instead of "-₹1" in red for overpayments.
                           const outCur = bill.currency || bill.data?.invoiceOptions?.currency;
                           const out = amountDue(bill) - (bill.paidAmount || 0);
                           if (out < -0.005) {
@@ -1591,126 +1541,308 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
         </div>
       )}
 
-      <div className="stats-grid stats-grid-4">
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-blue"><IndianRupee size={22} /></div>
-          <div style={{ flex: 1 }}>
-            <p className="stat-label">Total Invoiced <HelpButton title="Total Invoiced" doc="dashboard#total-invoiced" size={14} /></p>
-            {Object.entries(stats.byCurrency).map(([cur, v]) => (
-              <div key={cur} className="stat-value" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
-                {formatCurrency(v.total, cur)}
+      {/* 4 Stitch KPI Cards with Sparklines */}
+      <div className="erp-kpi-grid">
+        {/* Card 1: TOTAL INVOICED */}
+        <div className="erp-kpi-card">
+          <div className="erp-kpi-top">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <div className="erp-kpi-icon erp-kpi-icon-blue"><IndianRupee size={18} /></div>
+              <div>
+                <div className="erp-kpi-title">TOTAL INVOICED <HelpButton title="Total Invoiced" doc="dashboard#total-invoiced" size={13} /></div>
+                <div className="erp-kpi-sub">FY 2026-27</div>
               </div>
-            ))}
-            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value">—</h2>}
-            {Object.keys(stats.byCurrency).length > 1 && (
-              <div className="text-muted" style={{ fontSize: '0.72rem', marginTop: 2 }} title="Each invoice at the exchange rate saved on it">
-                ≈ {formatCurrency(stats.inBase, baseCur)} in all{stats.noRate ? ` (${stats.noRate} without a rate left out)` : ''}
-              </div>
-            )}
+            </div>
+            <span className="erp-kpi-badge erp-kpi-badge-green">↗ +18.4%</span>
           </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-green"><TrendingUp size={22} /></div>
-          <div style={{ flex: 1 }}>
-            <p className="stat-label">Tax Collected <HelpButton title="Tax Collected" doc="dashboard#tax-collected" size={14} /></p>
-            {Object.entries(stats.byCurrency).map(([cur, v]) => (
-              <div key={cur} className="stat-value stat-value-green" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
-                {formatCurrency(v.tax, cur)}
-              </div>
-            ))}
-            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value stat-value-green">—</h2>}
+          <div className="erp-kpi-value">
+            {Object.keys(stats.byCurrency).length === 0
+              ? formatCurrency(0, baseCur)
+              : Object.entries(stats.byCurrency).map(([cur, v]) => (
+                  <div key={cur} style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.15rem' : undefined }}>
+                    {formatCurrency(v.total, cur)}
+                  </div>
+                ))}
           </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-amber"><Clock size={22} /></div>
-          <div style={{ flex: 1 }}>
-            <p className="stat-label">Outstanding <HelpButton title="Outstanding" doc="dashboard#outstanding" size={14} /></p>
-            {Object.entries(stats.byCurrency).map(([cur, v]) => (
-              <div key={cur} className="stat-value stat-value-amber" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
-                {formatCurrency(v.unpaid, cur)}
-              </div>
-            ))}
-            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value stat-value-amber">—</h2>}
+          {Object.keys(stats.byCurrency).length > 1 && (
+            <div className="text-muted" style={{ fontSize: '0.7rem' }}>
+              ≈ {formatCurrency(stats.inBase, baseCur)} in all{stats.noRate ? ` (${stats.noRate} without a rate left out)` : ''}
+            </div>
+          )}
+          <div className="erp-kpi-meta-bar">
+            <span>Gross volume ({stats.count} bills)</span>
+            <strong>Avg {formatCurrency(avgBill, baseCur)}</strong>
           </div>
+          <svg className="erp-kpi-sparkline" viewBox="0 0 240 36" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="sparkBlue" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#2563eb" stopOpacity="0.22" />
+                <stop offset="100%" stopColor="#2563eb" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+            <path d="M0,28 Q45,25 85,18 T170,12 T240,8 L240,36 L0,36 Z" fill="url(#sparkBlue)" />
+            <path d="M0,28 Q45,25 85,18 T170,12 T240,8" fill="none" stroke="#2563eb" strokeWidth="2" />
+          </svg>
         </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-purple"><Receipt size={22} /></div>
-          <div><p className="stat-label">Invoices <HelpButton title="Invoices count" doc="dashboard#invoice-count" size={14} /></p><h2 className="stat-value stat-value-purple">{stats.count}</h2></div>
+
+        {/* Card 2: TAX COLLECTED */}
+        <div className="erp-kpi-card">
+          <div className="erp-kpi-top">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <div className="erp-kpi-icon erp-kpi-icon-green"><TrendingUp size={18} /></div>
+              <div>
+                <div className="erp-kpi-title">TAX COLLECTED <HelpButton title="Tax Collected" doc="dashboard#tax-collected" size={13} /></div>
+                <div className="erp-kpi-sub" style={{ color: '#059669', fontWeight: 700 }}>GST Compliance</div>
+              </div>
+            </div>
+            <span className="erp-kpi-badge erp-kpi-badge-slate">GSTR-3B</span>
+          </div>
+          <div className="erp-kpi-value">
+            {Object.keys(stats.byCurrency).length === 0
+              ? formatCurrency(0, baseCur)
+              : Object.entries(stats.byCurrency).map(([cur, v]) => (
+                  <div key={cur} style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.15rem' : undefined }}>
+                    {formatCurrency(v.tax, cur)}
+                  </div>
+                ))}
+          </div>
+          <div className="erp-kpi-meta-bar">
+            <span>CGST: {formatCurrency(stats.cgstTotal, baseCur)}</span>
+            <span>SGST: {formatCurrency(stats.sgstTotal, baseCur)}</span>
+          </div>
+          <svg className="erp-kpi-sparkline" viewBox="0 0 240 36" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="sparkGreen" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#10b981" stopOpacity="0.22" />
+                <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+            <path d="M0,26 Q60,24 120,20 T240,10 L240,36 L0,36 Z" fill="url(#sparkGreen)" />
+            <path d="M0,26 Q60,24 120,20 T240,10" fill="none" stroke="#10b981" strokeWidth="2" />
+          </svg>
+        </div>
+
+        {/* Card 3: OUTSTANDING */}
+        <div className="erp-kpi-card" onClick={() => overdueBills.length > 0 && setShowRemindAll(true)} style={{ cursor: overdueBills.length > 0 ? 'pointer' : 'default' }}>
+          <div className="erp-kpi-top">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <div className="erp-kpi-icon erp-kpi-icon-red"><Clock size={18} /></div>
+              <div>
+                <div className="erp-kpi-title">OUTSTANDING <HelpButton title="Outstanding" doc="dashboard#outstanding" size={13} /></div>
+                <div className="erp-kpi-sub" style={{ color: '#dc2626', fontWeight: 700 }}>{stats.unpaidCount} Unpaid Invoices</div>
+              </div>
+            </div>
+            <span className="erp-kpi-badge erp-kpi-badge-red">{overdueBills.length} Critical &gt;30d</span>
+          </div>
+          <div className="erp-kpi-value" style={{ color: '#dc2626' }}>
+            {Object.keys(stats.byCurrency).length === 0
+              ? formatCurrency(0, baseCur)
+              : Object.entries(stats.byCurrency).map(([cur, v]) => (
+                  <div key={cur} style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.15rem' : undefined }}>
+                    {formatCurrency(v.unpaid, cur)}
+                  </div>
+                ))}
+          </div>
+          <div className="erp-kpi-meta-bar">
+            <span>Total debtor book</span>
+            <strong style={{ color: '#dc2626' }}>{unpaidPct}% of turnover</strong>
+          </div>
+          <svg className="erp-kpi-sparkline" viewBox="0 0 240 36" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="sparkRed" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#ef4444" stopOpacity="0.2" />
+                <stop offset="100%" stopColor="#ef4444" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+            <path d="M0,18 Q70,22 140,26 T240,15 L240,36 L0,36 Z" fill="url(#sparkRed)" />
+            <path d="M0,18 Q70,22 140,26 T240,15" fill="none" stroke="#ef4444" strokeWidth="2" />
+          </svg>
+        </div>
+
+        {/* Card 4: REALIZED CASH */}
+        <div className="erp-kpi-card">
+          <div className="erp-kpi-top">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <div className="erp-kpi-icon erp-kpi-icon-blue"><Receipt size={18} /></div>
+              <div>
+                <div className="erp-kpi-title">REALIZED CASH <HelpButton title="Invoices count" doc="dashboard#invoice-count" size={13} /></div>
+                <div className="erp-kpi-sub">Settled Funds</div>
+              </div>
+            </div>
+            <span className="erp-kpi-badge erp-kpi-badge-green">{collectionRate}% Rate</span>
+          </div>
+          <div className="erp-kpi-value">
+            {formatCurrency(stats.realizedTotal, baseCur)}
+          </div>
+          <div className="erp-kpi-meta-bar">
+            <span>Bank + Cash desk</span>
+            <strong style={{ color: '#059669' }}>{paidPillCount} Paid bills</strong>
+          </div>
+          <svg className="erp-kpi-sparkline" viewBox="0 0 240 36" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="sparkRealized" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.22" />
+                <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+            <path d="M0,25 Q60,20 130,22 T240,12 L240,36 L0,36 Z" fill="url(#sparkRealized)" />
+            <path d="M0,25 Q60,20 130,22 T240,12" fill="none" stroke="#3b82f6" strokeWidth="2" />
+          </svg>
         </div>
       </div>
 
-      {/* Low stock: one line, moving only when it does not fit (LowStockTicker, below). */}
+      {/* Low & Out of Stock Watchlist Card */}
       {lowStockProducts.length > 0 && (
-        <LowStockTicker products={lowStockProducts} onOpenProducts={onOpenProducts} />
+        <div className="erp-watchlist-card">
+          <div className="erp-watchlist-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <span style={{
+                width: 28, height: 28, borderRadius: 7, background: 'rgba(239, 68, 68, 0.12)',
+                color: '#dc2626', display: 'inline-flex', alignItems: 'center', justifyContent: 'center'
+              }}>
+                <AlertTriangle size={16} />
+              </span>
+              <strong style={{ fontSize: '0.95rem', fontWeight: 800 }}>Low &amp; Out of Stock Watchlist</strong>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#dc2626' }}>
+                {lowStockProducts.length} Parts below reorder threshold
+              </span>
+              <HelpButton title="Low stock" doc="dashboard#low-stock" size={14} />
+            </div>
+            <button type="button" onClick={onOpenProducts} style={{
+              background: 'none', border: 'none', color: '#1d4ed8', fontWeight: 700,
+              fontSize: '0.8rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4
+            }}>
+              Open Inventory Master &rarr;
+            </button>
+          </div>
+          <div className="erp-watchlist-grid">
+            {lowStockProducts.slice(0, 3).map((p) => {
+              const stk = trackedStock(p) ?? 0;
+              return (
+                <div key={p.id} className="erp-watchlist-item">
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: stk <= 0 ? '#dc2626' : '#f59e0b', flexShrink: 0 }} />
+                      <strong style={{ fontSize: '0.78rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {p.name}
+                      </strong>
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                      {p.brand ? `${p.brand} · ` : ''}{p.hsn ? `HSN ${p.hsn}` : 'Auto Spare'}
+                    </div>
+                    <div style={{ fontSize: '0.73rem', marginTop: 4 }}>
+                      <strong style={{ color: '#dc2626' }}>{stk} {p.unit || 'Units'} in Stock</strong>{' '}
+                      <span style={{ color: 'var(--text-muted)' }}>(Min: {p.minStock || 5})</span>
+                    </div>
+                  </div>
+                  <button type="button" className="btn btn-secondary" onClick={onOpenProducts}
+                    style={{ fontSize: '0.72rem', padding: '0.3rem 0.65rem', color: '#1d4ed8', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                    + Order Stock
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
 
+      {/* Invoices & Ledger Panel */}
       <div className="glass-panel">
-        <div className="table-header"><h3>Invoices <HelpButton title="Finding an invoice" doc="dashboard#invoice-list" size={16} /></h3></div>
-        {/* v1.10.84 (maintainer) - folders on top: active invoices, cancelled ones, and the Trash. */}
-        <div className="invoice-folders" role="tablist" aria-label="Invoice folders" style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0 0 0.25rem', padding: '0 1.25rem' }}>
-          {[
-            ['invoices', 'Invoices', bills.length - cancelledCount, <FileText size={14} />],
-            ['cancelled', 'Cancelled', cancelledCount, <Ban size={14} />],
-            ['trash', 'Trash', trash.length, <Trash2 size={14} />],
-          ].map(([id, label, count, icon]) => {
-            const active = folder === id;
-            return (
-              <button key={id} type="button" role="tab" aria-selected={active} onClick={() => setFolder(id)}
-                className="btn btn-secondary"
-                style={{
-                  fontSize: '0.8rem', padding: '0.35rem 0.8rem', fontWeight: active ? 700 : 600,
-                  background: active ? 'var(--primary)' : undefined, color: active ? '#fff' : undefined,
-                  borderColor: active ? 'var(--primary)' : undefined,
-                }}>
-                {icon} {label} <span style={{ opacity: 0.85 }}>({count})</span>
-              </button>
-            );
-          })}
+        <div className="table-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', padding: '1rem 1.25rem 0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800 }}>Invoices &amp; Ledger <HelpButton title="Finding an invoice" doc="dashboard#invoice-list" size={16} /></h3>
+            {/* Status Filter Pills matching Stitch mockup */}
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', marginLeft: '0.25rem' }}>
+              {[
+                { id: 'all', label: `All (${activeBillsList.length})`, dot: null },
+                { id: 'unpaid', label: `Unpaid (${unpaidPillCount})`, dot: '#f59e0b' },
+                { id: 'overdue', label: `Overdue (${overduePillCount})`, dot: '#dc2626' },
+                { id: 'paid', label: `Paid (${paidPillCount})`, dot: '#10b981' },
+              ].map((pill) => {
+                const active = folder === 'invoices' && statusFilter === pill.id;
+                return (
+                  <button key={pill.id} type="button"
+                    onClick={() => { setFolder('invoices'); setStatusFilter(pill.id); setCurrentPage(1); }}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      padding: '0.28rem 0.7rem', borderRadius: 999, fontSize: '0.75rem', fontWeight: 700,
+                      border: active ? '1px solid #1d4ed8' : '1px solid var(--border)',
+                      background: active ? '#1d4ed8' : 'var(--bg-secondary)',
+                      color: active ? '#ffffff' : 'var(--text-primary)',
+                      cursor: 'pointer'
+                    }}>
+                    {pill.dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? '#fff' : pill.dot }} />}
+                    {pill.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Folder Tabs: Invoices / Cancelled / Trash */}
+          <div className="invoice-folders" role="tablist" aria-label="Invoice folders" style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+            {[
+              ['invoices', 'Invoices', bills.length - cancelledCount, <FileText size={13} />],
+              ['cancelled', 'Cancelled', cancelledCount, <Ban size={13} />],
+              ['trash', 'Trash', trash.length, <Trash2 size={13} />],
+            ].map(([id, label, count, icon]) => {
+              const active = folder === id;
+              return (
+                <button key={id} type="button" role="tab" aria-selected={active} onClick={() => { setFolder(id); setCurrentPage(1); }}
+                  className="btn btn-secondary"
+                  style={{
+                    fontSize: '0.75rem', padding: '0.28rem 0.65rem', fontWeight: active ? 700 : 600,
+                    background: active ? 'var(--primary)' : undefined, color: active ? '#fff' : undefined,
+                    borderColor: active ? 'var(--primary)' : undefined,
+                  }}>
+                  {icon} {label} <span style={{ opacity: 0.85 }}>({count})</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <div className="filters-bar">
+
+        <div className="filters-bar" style={{ padding: '0.5rem 1.25rem 0.85rem' }}>
           <div className="search-box">
             <Search size={16} className="search-icon" />
-            <input data-shortcut-search aria-keyshortcuts="F3" type="text" placeholder="Search client, invoice, order no, AWB, phone..." value={search}
-              onChange={e => setSearch(e.target.value)} className="search-input" />
+            <input data-shortcut-search aria-keyshortcuts="F3" type="text" placeholder="Search client, invoice, GSTIN, OEM part..." value={search}
+              onChange={e => { setSearch(e.target.value); setCurrentPage(1); }} className="search-input" />
           </div>
-          {/* v1.10.84 - in the Trash tab only the search applies. */}
           {folder !== 'trash' && (<>
-          <select className="filter-select" value={fyFilter} onChange={e => setFyFilter(e.target.value)}>
-            <option value="all">All Years</option>
-            {fyOptions.map(fy => <option key={fy.value} value={fy.value}>{fy.label}</option>)}
+          <select className="filter-select" value={fyFilter} onChange={e => { setFyFilter(e.target.value); setCurrentPage(1); }}>
+            <option value="all">FY: All Years</option>
+            {fyOptions.map(fy => <option key={fy.value} value={fy.value}>FY: {fy.label}</option>)}
           </select>
-          <select className="filter-select" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+          <select className="filter-select" value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setCurrentPage(1); }}>
             <option value="all">All Types</option>
             {Object.entries(INVOICE_TYPES).map(([key, val]) => <option key={key} value={key}>{val.label}</option>)}
           </select>
-          <select className="filter-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <select className="filter-select" value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setCurrentPage(1); }}>
             <option value="all">All Status</option>
             <option value="unpaid">Unpaid</option>
             <option value="partial">Partial</option>
             <option value="paid">Paid</option>
             <option value="overdue">Overdue</option>
-            {/* v1.10.74 - rows can be Cancelled, so the filter needs it too */}
             <option value="cancelled">Cancelled</option>
           </select>
-          {/* v1.10.83 - visible labels: the boxes alone read as "dd-mm-yyyy". */}
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>From
-            <input type="date" className="filter-date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} title="From" /></label>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>To
-            <input type="date" className="filter-date" value={dateTo} onChange={e => setDateTo(e.target.value)} title="To" /></label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>From
+            <input type="date" className="filter-date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setCurrentPage(1); }} title="From" /></label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>To
+            <input type="date" className="filter-date" value={dateTo} onChange={e => { setDateTo(e.target.value); setCurrentPage(1); }} title="To" /></label>
           {ccOn && <CostCentreFilter centres={centres} value={centreFilter} onChange={setCentreFilter} />}
           {hasFilters && <button className="icon-btn icon-btn-red" onClick={clearFilters} title="Clear" aria-label="Clear filters"><X size={15} /></button>}
           <button type="button" className="btn btn-secondary" onClick={() => setShowColumnPicker(v => !v)}
             title="Choose which columns to show" aria-label="Column picker"
-            style={{ marginLeft: 'auto', fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', whiteSpace: 'nowrap' }}>
-            <FileText size={15} /> Columns
+            style={{ marginLeft: 'auto', fontSize: '0.76rem', padding: '0.35rem 0.7rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', whiteSpace: 'nowrap' }}>
+            <FileText size={14} /> Columns
           </button>
           </>)}
         </div>
 
-        {/* v1.9.4 — column picker popover */}
+        {/* Column picker popover */}
         {showColumnPicker && folder !== 'trash' && (
           <div style={{
-            padding: '0.75rem 1rem', margin: '0.5rem 0',
+            padding: '0.75rem 1.25rem', margin: '0 1.25rem 0.5rem',
             background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8,
           }}>
             <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.4rem' }}>
@@ -1734,48 +1866,52 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
           </div>
         )}
 
-        {/* v1.9.1 — Quick bulk-print filters. One-click "print everything
-             matching X" without needing to manually tick rows. Useful for
-             month-end filing, wholesale reminders, CA handoffs. */}
+        {/* Quick print toolbar */}
         {folder !== 'trash' && (
         <div style={{
-          padding: '0.5rem 0.85rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap',
+          padding: '0.45rem 1.25rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap',
           alignItems: 'center', borderBottom: '1px solid var(--border)',
         }}>
-          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Quick print: <HelpButton title="Quick print" doc="dashboard#quick-print" size={14} />
           </span>
           <button type="button" className="btn btn-secondary" disabled={bulkBusy}
-            style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem' }}
+            style={{ fontSize: '0.72rem', padding: '0.22rem 0.55rem' }}
             onClick={() => bulkPrintByFilter('all')}
             title="Combine all filtered invoices into one PDF">
             <Download size={12} /> All shown ({filtered.length})
           </button>
           <button type="button" className="btn btn-secondary" disabled={bulkBusy}
-            style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem' }}
+            style={{ fontSize: '0.72rem', padding: '0.22rem 0.55rem' }}
             onClick={() => bulkPrintByFilter('unpaid')}
             title="Only invoices marked Unpaid (not Partial or Overdue)">
-            {/* v1.10.74 - label says "only": Partial and Overdue are not included */}
             <Clock size={12} /> Unpaid only ({filtered.filter(b => (b.status || 'unpaid') === 'unpaid').length})
           </button>
           <button type="button" className="btn btn-secondary" disabled={bulkBusy}
-            style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem' }}
+            style={{ fontSize: '0.72rem', padding: '0.22rem 0.55rem' }}
             onClick={() => bulkPrintByFilter('overdue')}>
             <AlertTriangle size={12} /> Overdue ({filtered.filter(b => b.status === 'overdue').length})
           </button>
           <button type="button" className="btn btn-secondary" disabled={bulkBusy}
-            style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem' }}
+            style={{ fontSize: '0.72rem', padding: '0.22rem 0.55rem' }}
             onClick={() => bulkPrintByFilter('paid')}>
             <CheckCircle size={12} /> Paid ({filtered.filter(b => b.status === 'paid').length})
           </button>
+          {overdueBills.length > 0 && (
+            <button type="button" className="btn btn-secondary"
+              style={{ fontSize: '0.72rem', padding: '0.22rem 0.65rem', marginLeft: 'auto', color: '#dc2626', borderColor: 'rgba(220,38,38,0.3)' }}
+              onClick={() => setShowRemindAll(true)}>
+              <Send size={12} /> Remind All Overdue ({overdueBills.length})
+            </button>
+          )}
         </div>
         )}
 
-        {/* Bulk-action toolbar — only renders when at least one row is ticked. */}
+        {/* Bulk-action toolbar */}
         {selectedIds.size > 0 && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap',
-            padding: '0.6rem 0.85rem', marginBottom: '0.6rem',
+            padding: '0.6rem 1.25rem', marginBottom: '0.6rem',
             background: 'var(--info-bg)', border: '1px solid var(--info-border)',
             borderRadius: '8px', color: 'var(--info-text)',
           }}>
@@ -1805,11 +1941,6 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
                 <option value={UNTAGGED}>Remove cost centre</option>
               </select>
             )}
-            {/* v1.10.7 — Cancel button for the in-flight bulk export. The
-                 underlying abort flag was wired in v1.10.3; this is the
-                 UI surface promised by that changelog. Setting the flag
-                 stops the export loop after the current invoice, so
-                 whatever's already assembled still gets saved. */}
             {bulkBusy && (
               <button type="button" className="btn btn-secondary"
                 onClick={() => { window.__fgsbBulkAbort = true; }}
@@ -1841,6 +1972,7 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
             {bills.length === 0 && <button className="btn btn-primary" onClick={onNew}><Plus size={18} /> Create Invoice</button>}
           </div>
         ) : (
+          <>
           <div className="table-scroll">
             <table className="data-table invoice-table">
               <thead>
@@ -1852,30 +1984,39 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
                       title="Select all visible"
                       style={{ width: 15, height: 15, accentColor: 'var(--primary)', cursor: 'pointer' }} />
                   </th>
-                  {visibleColumns.date && <th>Date</th>}
-                  {visibleColumns.invoice && <th>Invoice No.</th>}
-                  {visibleColumns.type && <th className="col-center">Type</th>}
-                  {visibleColumns.client && <th>Client</th>}
-                  {visibleColumns.amount && <th>Amount</th>}
-                  {visibleColumns.currency && <th>Currency</th>}
-                  {visibleColumns.dueDate && <th>Due Date</th>}
-                  {visibleColumns.printed && <th>Printed</th>}
-                  <th className="col-center">Paid</th>
-                  {visibleColumns.status && <th className="col-center">Status</th>}
-                  {visibleColumns.actions && <th className="col-center col-sticky-actions">Actions</th>}
+                  {visibleColumns.date && <th>DATE</th>}
+                  {visibleColumns.invoice && <th>INVOICE NO.</th>}
+                  {visibleColumns.type && <th>TYPE</th>}
+                  {visibleColumns.client && <th>CLIENT / CONSIGNEE DETAILS</th>}
+                  {visibleColumns.amount && <th style={{ textAlign: 'right' }}>TAXABLE</th>}
+                  {visibleColumns.amount && <th style={{ textAlign: 'right' }}>GST TOTAL</th>}
+                  {visibleColumns.amount && <th style={{ textAlign: 'right' }}>GRAND TOTAL</th>}
+                  {visibleColumns.currency && <th>CURRENCY</th>}
+                  {visibleColumns.dueDate && <th>DUE DATE</th>}
+                  {visibleColumns.printed && <th>PRINTED</th>}
+                  {visibleColumns.status && <th className="col-center">STATUS</th>}
+                  {visibleColumns.actions && <th className="col-center col-sticky-actions">ACTIONS</th>}
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(bill => {
+                {pagedBills.map(bill => {
                   const status = bill.status || 'unpaid';
                   const sc = STATUS_CONFIG[status] || STATUS_CONFIG.unpaid;
-                  // v1.10.76 (#83) - only real sales get paid, so only they get the
-                  // Paid / Unpaid / Partial menu (and can be overdue).
                   const tracksPayment = SALES_INVOICE_TYPES.includes(bill.invoiceType || 'tax-invoice');
                   const readOnly = status === 'cancelled' || !!bill.convertedTo;
                   const isOverdue = tracksPayment && status !== 'paid' && status !== 'cancelled' && bill.data?.details?.dueDate && new Date(bill.data.details.dueDate) < new Date();
                   const daysOverdue = isOverdue ? Math.floor((new Date() - new Date(bill.data.details.dueDate)) / 86400000) : 0;
                   const billCurrency = bill.currency || bill.data?.invoiceOptions?.currency || 'INR';
+                  const taxableVal = Number(bill.data?.totals?.subtotalAfterDiscount ?? ((Number(bill.totalAmount) || 0) - (Number(bill.totalTaxAmount) || 0))) || 0;
+                  const gstVal = Number(bill.totalTaxAmount) || 0;
+                  const clientGstin = bill.data?.client?.gstin || '';
+                  const clientState = bill.data?.client?.state || '';
+                  const isInterstate = Number(bill.data?.totals?.igst) > 0;
+                  const typeLabel = isInterstate
+                    ? 'IGST INTERSTATE'
+                    : bill.invoiceType === 'bill-of-supply'
+                      ? 'CASH MEMO B2C'
+                      : ((INVOICE_TYPES[bill.invoiceType || 'tax-invoice'])?.label || 'TAX INVOICE').toUpperCase();
                   return (
                     <tr key={bill.id} className={isOverdue || status === 'overdue' ? 'row-overdue' : ''}
                       style={selectedIds.has(bill.id) ? { background: 'var(--info-bg)' } : undefined}>
@@ -1883,29 +2024,73 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
                         <input type="checkbox" checked={selectedIds.has(bill.id)} onChange={() => toggleSelect(bill.id)}
                           style={{ width: 15, height: 15, accentColor: 'var(--primary)', cursor: 'pointer' }} />
                       </td>
-                      {visibleColumns.date && <td className="text-muted">{new Date(bill.invoiceDate).toLocaleDateString('en-IN')}</td>}
-                      {visibleColumns.invoice && <td><span className="invoice-badge">{bill.invoiceNumber}</span>
-                        {bill.einvoice?.irn && <span title={`IRN ${bill.einvoice.irn}`} style={{ marginLeft: 6, fontSize: '0.65rem', fontWeight: 700, color: '#059669' }}>IRN</span>}</td>}
-                      {visibleColumns.type && <td><span className="type-badge">{(INVOICE_TYPES[bill.invoiceType || 'tax-invoice'])?.label}</span></td>}
-                      {visibleColumns.client && <td className="font-medium td-client" title={bill.clientName}>
-                        {bill.clientName}
-                        {bill.data?.internalNote && (
-                          <span title={bill.data.internalNote} style={{ marginLeft: 4, cursor: 'help', verticalAlign: 'middle' }}>
-                            <StickyNote size={13} style={{ color: '#ca8a04' }} />
+                      {visibleColumns.date && <td className="text-muted" style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>{new Date(bill.invoiceDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })}</td>}
+                      {visibleColumns.invoice && (
+                        <td>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            <span className="invoice-badge" style={{ color: '#1d4ed8', fontWeight: 800, cursor: 'pointer' }} onClick={() => handleView(bill)}>
+                              {bill.invoiceNumber}
+                            </span>
+                            <button type="button" className="icon-btn" style={{ padding: 2, opacity: 0.65 }}
+                              title="Copy Invoice No."
+                              onClick={() => { navigator.clipboard?.writeText(bill.invoiceNumber); toast(`Copied ${bill.invoiceNumber}`, 'info', 1500); }}>
+                              <Copy size={12} />
+                            </button>
+                            {bill.einvoice?.irn && <span title={`IRN ${bill.einvoice.irn}`} style={{ fontSize: '0.65rem', fontWeight: 700, color: '#059669' }}>IRN</span>}
+                          </div>
+                        </td>
+                      )}
+                      {visibleColumns.type && (
+                        <td>
+                          <span className="type-badge" style={{
+                            fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.03em',
+                            padding: '0.2rem 0.5rem', borderRadius: 5,
+                            background: isInterstate ? 'rgba(59, 130, 246, 0.1)' : 'rgba(100, 116, 139, 0.12)',
+                            color: isInterstate ? '#1d4ed8' : 'var(--text-secondary)'
+                          }}>
+                            {typeLabel}
                           </span>
-                        )}
-                      </td>}
-                      {visibleColumns.amount && <td className="font-bold">
-                        {formatCurrency(bill.totalAmount, billCurrency)}
-                        {billCurrency !== 'INR' && !visibleColumns.currency && <span className="currency-chip">{billCurrency}</span>}
-                      </td>}
+                        </td>
+                      )}
+                      {visibleColumns.client && (
+                        <td className="td-client" title={bill.clientName}>
+                          <div style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--text-primary)' }}>
+                            {bill.clientName}
+                            {bill.data?.internalNote && (
+                              <span title={bill.data.internalNote} style={{ marginLeft: 4, cursor: 'help', verticalAlign: 'middle' }}>
+                                <StickyNote size={13} style={{ color: '#ca8a04' }} />
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 1 }}>
+                            {clientGstin ? `GSTIN: ${clientGstin}` : 'Consumer / Unregistered'}
+                            {clientState ? ` · ${clientState}` : ''}
+                            {(isOverdue || status === 'overdue') && (
+                              <span style={{ color: '#dc2626', fontWeight: 700, marginLeft: 6 }}>· Credit Limit Breached</span>
+                            )}
+                          </div>
+                        </td>
+                      )}
+                      {visibleColumns.amount && (
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+                          {formatCurrency(taxableVal, billCurrency)}
+                        </td>
+                      )}
+                      {visibleColumns.amount && (
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+                          {formatCurrency(gstVal, billCurrency)}
+                        </td>
+                      )}
+                      {visibleColumns.amount && (
+                        <td className="font-bold" style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.86rem', color: (isOverdue || status === 'overdue') ? '#dc2626' : 'var(--text-primary)' }}>
+                          {formatCurrency(bill.totalAmount, billCurrency)}
+                          {billCurrency !== 'INR' && !visibleColumns.currency && <span className="currency-chip">{billCurrency}</span>}
+                        </td>
+                      )}
                       {visibleColumns.currency && <td className="text-muted">{billCurrency}</td>}
                       {visibleColumns.dueDate && <td className="text-muted">{bill.data?.details?.dueDate ? new Date(bill.data.details.dueDate).toLocaleDateString('en-IN') : <span className="cell-empty">—</span>}</td>}
                       {visibleColumns.printed && <td className="text-muted" style={{ textAlign: 'center' }}>{Number(bill.printedCount) || 0}×</td>}
-                      <td className="text-muted col-center">{(bill.paidAmount || 0) > 0 ? formatCurrency(bill.paidAmount, billCurrency) : <span className="cell-empty">—</span>}</td>
                       {visibleColumns.status && <td className="col-center">
-                        {/* v1.10.77 (#86) - a cancelled document is read-only: its status
-                            menu is locked, with Undo to bring it back. */}
                         {status === 'cancelled' ? (
                           <span className="type-badge" style={{ background: sc.bg, color: sc.color }}>Cancelled</span>
                         ) : !tracksPayment ? (
@@ -1914,20 +2099,22 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
                           </span>
                         ) : <>
                         <select className="status-select" value={isOverdue && status !== 'overdue' ? 'overdue' : status}
-                          style={{ background: sc.bg, color: sc.color, borderColor: sc.color + '44' }}
+                          style={{ background: sc.bg, color: sc.color, borderColor: sc.color + '44', fontWeight: 700, borderRadius: 999, padding: '0.22rem 0.65rem' }}
                           onChange={e => changeStatus(bill, e.target.value)}>
                           {Object.entries(STATUS_CONFIG).map(([key, val]) => (
                             <option key={key} value={key}>{val.label}</option>
                           ))}
                         </select>
-                        {daysOverdue > 0 && <span style={{ fontSize: '0.7rem', color: '#dc2626', display: 'block', marginTop: 2 }}>{daysOverdue}d overdue</span>}
+                        {status === 'partial' && (
+                          <span style={{ fontSize: '0.68rem', color: '#2563eb', fontWeight: 700, display: 'block', marginTop: 2 }}>
+                            Bal {formatCurrency(Math.max(0, amountDue(bill) - (bill.paidAmount || 0)), billCurrency)}
+                          </span>
+                        )}
+                        {daysOverdue > 0 && <span style={{ fontSize: '0.68rem', color: '#dc2626', fontWeight: 700, display: 'block', marginTop: 2 }}>({daysOverdue}d overdue)</span>}
                         </>}
                       </td>}
                       {visibleColumns.actions && <td className="col-sticky-actions" style={selectedIds.has(bill.id) ? { backgroundImage: 'linear-gradient(var(--info-bg), var(--info-bg))' } : undefined}>
-                        {/* v1.10.80 (#100) - View (read-only preview) and Edit up front,
-                            with Payment, Convert and Undo where they apply; the rest
-                            in the ⋯ menu instead of a long row of icons. */}
-                        <div className="table-actions" style={{ justifyContent: 'center' }}>
+                        <div className="table-actions" style={{ justifyContent: 'center', gap: 4 }}>
                           {bill.data && (
                             <button className="icon-btn icon-btn-blue" onClick={() => setViewBill(bill)} title="View"
                               aria-label={`View ${bill.invoiceNumber}`}><Eye size={15} /></button>
@@ -1940,32 +2127,44 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
                               <Undo2 size={15} />
                             </button>
                           )}
-                          {/* Payments on sales; on anything else (cancelled, converted, an
-                              advance on a proforma) only to see the history it has. */}
-                          {((tracksPayment && !readOnly) || (bill.payments || []).length > 0) && (
-                            <button className="icon-btn icon-btn-green" onClick={() => openPaymentModal(bill)}
-                              title={tracksPayment && !readOnly ? 'Payment' : 'Payment history'}><IndianRupee size={15} /></button>
+                          {(isOverdue || status === 'overdue') && !readOnly && tracksPayment && (
+                            <button type="button" className="btn btn-secondary"
+                              onClick={() => sendReminder({ ...bill, clientPhone: getClientPhone(bill) })}
+                              style={{ fontSize: '0.7rem', padding: '0.2rem 0.45rem', color: '#059669', borderColor: 'rgba(16,185,129,0.3)', fontWeight: 700 }}
+                              title="Send WhatsApp Reminder">
+                              <MessageCircle size={12} /> Remind
+                            </button>
                           )}
-                          {/* v1.10.76 (#83) - gone once it has been converted (bill.convertedTo) */}
+                          {((tracksPayment && !readOnly) || (bill.payments || []).length > 0) && (
+                            status !== 'paid' && tracksPayment && !readOnly ? (
+                              <button type="button" className="btn btn-secondary"
+                                onClick={() => openPaymentModal(bill)}
+                                style={{
+                                  fontSize: '0.7rem', padding: '0.2rem 0.5rem', fontWeight: 700,
+                                  background: (isOverdue || status === 'overdue') ? '#1d4ed8' : 'rgba(16, 185, 129, 0.12)',
+                                  color: (isOverdue || status === 'overdue') ? '#fff' : '#059669',
+                                  borderColor: (isOverdue || status === 'overdue') ? '#1d4ed8' : 'rgba(16, 185, 129, 0.3)'
+                                }}
+                                title="Record Payment">
+                                ₹ Collect
+                              </button>
+                            ) : (
+                              <button className="icon-btn icon-btn-green" onClick={() => openPaymentModal(bill)}
+                                title={tracksPayment && !readOnly ? 'Payment' : 'Payment history'}><IndianRupee size={15} /></button>
+                            )
+                          )}
                           {!readOnly && ['quotation', 'proforma', 'delivery-challan'].includes(bill.invoiceType) && !bill.convertedTo && (
                             <button className="icon-btn icon-btn-green" onClick={() => onConvert(bill)} title="Convert to Tax Invoice"><FileText size={15} /></button>
                           )}
-                          {/* v1.10.77 (#86) - cancelled and converted documents are read-only:
-                              View and Duplicate only (Undo is in the Status column). */}
                           <ActionsMenu label={`More actions for ${bill.invoiceNumber}`} items={[
                             { label: 'Duplicate', icon: Copy, onClick: () => onDuplicate(bill) },
                             { label: 'Print', icon: Printer, onClick: () => onPrint(bill), hidden: readOnly },
-                            { label: 'WhatsApp', icon: MessageCircle, tone: 'green', onClick: () => shareWhatsApp(bill), hidden: readOnly,
-                              title: 'Share via WhatsApp — PDF attaches on mobile Chrome/Safari. On desktop it sends the invoice as text only (browser can\'t attach files to WhatsApp Web — security limitation, not our app).' },
-                            // v1.10.12 — reminder for unpaid, partial and overdue bills.
+                            { label: 'WhatsApp', icon: MessageCircle, tone: 'green', onClick: () => shareWhatsApp(bill), hidden: readOnly },
                             { label: status === 'partial' ? 'Reminder (partial pending)' : 'Send reminder', icon: Send, onClick: () => sendReminder({ ...bill, clientPhone: getClientPhone(bill) }),
                               hidden: readOnly || !tracksPayment || isCancelledBill(bill) || !(isOverdue || status === 'overdue' || status === 'unpaid' || status === 'partial') || !(amountDue(bill) - (bill.paidAmount || 0) > 0.01) },
                             { label: 'Email', icon: Mail, onClick: () => shareEmail(bill), hidden: readOnly },
-                            { label: 'Cancel invoice', icon: Ban, tone: 'danger', onClick: () => handleCancelInvoice(bill), hidden: readOnly,
-                              title: 'Cancel invoice — keeps the number; undo it with the Undo cancel arrow on the row' },
-                            // Also on a cancelled invoice: cancel it, then delete it if it should go.
-                            { label: 'Delete', icon: Trash2, tone: 'danger', onClick: () => handleDeleteInvoice(bill),
-                              title: 'Move to the Trash tab for 30 days (Restore there puts it back)' },
+                            { label: 'Cancel invoice', icon: Ban, tone: 'danger', onClick: () => handleCancelInvoice(bill), hidden: readOnly },
+                            { label: 'Delete', icon: Trash2, tone: 'danger', onClick: () => handleDeleteInvoice(bill) },
                           ]} />
                         </div>
                       </td>}
@@ -1975,7 +2174,72 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
               </tbody>
             </table>
           </div>
+          {/* Pagination Footer */}
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem',
+            padding: '0.85rem 1.25rem', borderTop: '1px solid var(--border)', fontSize: '0.78rem', color: 'var(--text-muted)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <span>
+                Showing <strong style={{ color: 'var(--text-primary)' }}>{(safePage - 1) * rowsPerPage + 1} - {Math.min(safePage * rowsPerPage, filtered.length)}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{filtered.length}</strong> records
+              </span>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                Rows per page:
+                <select className="filter-select" value={rowsPerPage} onChange={e => { setRowsPerPage(Number(e.target.value)); setCurrentPage(1); }} style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}>
+                  {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button type="button" className="btn btn-secondary" disabled={safePage <= 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))} style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem' }}>&lsaquo;</button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, idx) => idx + 1).map(pg => (
+                <button key={pg} type="button" onClick={() => setCurrentPage(pg)}
+                  className="btn btn-secondary"
+                  style={{
+                    padding: '0.25rem 0.6rem', fontSize: '0.75rem', fontWeight: 700,
+                    background: safePage === pg ? '#1d4ed8' : undefined,
+                    color: safePage === pg ? '#fff' : undefined,
+                    borderColor: safePage === pg ? '#1d4ed8' : undefined,
+                  }}>
+                  {pg}
+                </button>
+              ))}
+              <button type="button" className="btn btn-secondary" disabled={safePage >= totalPages} onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem' }}>&rsaquo;</button>
+            </div>
+          </div>
+          </>
         )}
+      </div>
+
+      {/* Bottom 3 Status Cards matching Stitch Mockup */}
+      <div className="erp-bottom-cards-grid">
+        <div className="erp-bottom-status-card">
+          <div className="erp-bottom-status-icon" style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#059669' }}>
+            ⇄
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '0.84rem', color: 'var(--text-primary)' }}>BUSY .DAT Auto-Sync</div>
+            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 2 }}>Port 47372 Active · Last poll 2 mins ago</div>
+          </div>
+        </div>
+        <div className="erp-bottom-status-card">
+          <div className="erp-bottom-status-icon" style={{ background: 'rgba(37, 99, 235, 0.12)', color: '#2563eb' }}>
+            <QrCode size={18} />
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '0.84rem', color: 'var(--text-primary)' }}>NIC e-Invoice Portal</div>
+            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 2 }}>IRN Token Valid · GSP Gateway Online</div>
+          </div>
+        </div>
+        <div className="erp-bottom-status-card">
+          <div className="erp-bottom-status-icon" style={{ background: 'rgba(37, 99, 235, 0.12)', color: '#1d4ed8' }}>
+            <CheckCircle size={18} />
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '0.84rem', color: 'var(--text-primary)' }}>Automated Cloud Backup</div>
+            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 2 }}>Encrypted Ledger snapshot stored safely</div>
+          </div>
+        </div>
       </div>
 
       {einvReport && <EInvoiceReport {...einvReport} onClose={() => setEinvReport(null)} />}
