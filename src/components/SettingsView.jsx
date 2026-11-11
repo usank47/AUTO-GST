@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { getProfile, saveProfile, exportAllData, importData, inspectBackup, getTermsTemplates, saveTermsTemplate, deleteTermsTemplate, getAllProfiles, saveBusinessProfile, deleteBusinessProfile, getRegionMode, setRegionMode, getStockAlertSettings, saveStockAlertSettings, renameNumberSeries, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getCostCentres, saveCostCentres } from '../store';
+import { getProfile, saveProfile, exportAllData, importData, inspectBackup, getTermsTemplates, getDefaultTermsTemplateId, saveDefaultTermsTemplateId, saveTermsTemplate, deleteTermsTemplate, getAllProfiles, saveBusinessProfile, deleteBusinessProfile, getRegionMode, setRegionMode, getStockAlertSettings, saveStockAlertSettings, renameNumberSeries, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getCostCentres, saveCostCentres } from '../store';
 import { ensureToken, findOrCreateFolder, uploadJSON } from '../services/googleDrive';
-import { getCountryConfig, getStatesForCountry, validateTaxId, getCountriesForRegion, isModuleEnabled, getPaymentAccounts, createEmptyAccount, maskAccountNumber, reorderAccounts, setDefaultAccount, isValidUpiId, findSameBusiness, businessKeyOf, localToday } from '../utils';
+import { getCountryConfig, getStatesForCountry, validateTaxId, getCountriesForRegion, isModuleEnabled, getPaymentAccounts, createEmptyAccount, maskAccountNumber, reorderAccounts, setDefaultAccount, isValidUpiId, findSameBusiness, businessKeyOf, localToday, TERMS_PRESETS } from '../utils';
 import { normaliseLutArn, isLikelyLutArn, lutFyOptions, fyOf } from '../utils/lut';
 // v1.10.36 — lucide's `Image` icon was imported as `Image`, which
 // SHADOWED the browser's `HTMLImageElement` constructor. Reported:
@@ -15,6 +15,8 @@ import { initGoogleDrive, isConnected, disconnect } from '../services/googleDriv
 import { toast } from './Toast';
 import { confirmAction } from './ConfirmModal';
 import PrintSettings from './PrintSettings';
+import RichEditor from './RichEditor';
+import DOMPurify from 'dompurify';
 import HelpButton from './HelpButton';
 import AppLockSettings from './AppLockSettings';
 import PrivacyInternet from './PrivacyInternet';
@@ -168,6 +170,8 @@ export default function SettingsView({ onSaved }) {
   const [saving, setSaving] = useState(false);
   const [termsTemplates, setTermsTemplates] = useState([]);
   const [editingTemplate, setEditingTemplate] = useState(null);
+  const [defaultTermsId, setDefaultTermsId] = useState(null);
+  const [savingDefaultTerms, setSavingDefaultTerms] = useState(false);
   const [driveConnected, setDriveConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [businessProfiles, setBusinessProfiles] = useState([]);
@@ -225,7 +229,22 @@ export default function SettingsView({ onSaved }) {
     getStockAlertSettings().then((v) => { setStockAlerts(v); setStockSaved(JSON.stringify(v)); }).catch(() => {});
   }, []);
 
-  const loadTemplates = async () => setTermsTemplates(await getTermsTemplates());
+  const loadTemplates = async () => {
+    try {
+      const [templates, defaultId] = await Promise.all([getTermsTemplates(), getDefaultTermsTemplateId()]);
+      setTermsTemplates(templates);
+      setDefaultTermsId(defaultId);
+    } catch { toast('Could not load terms templates', 'error'); }
+  };
+  const changeDefaultTerms = async (id) => {
+    setSavingDefaultTerms(true);
+    try {
+      await saveDefaultTermsTemplateId(id);
+      setDefaultTermsId(id);
+      toast('Default invoice terms saved', 'success');
+    } catch { toast('Could not save default terms', 'error'); }
+    finally { setSavingDefaultTerms(false); }
+  };
   const loadBusinessProfiles = async () => setBusinessProfiles(await getAllProfiles());
 
   const handleChange = (e) => {
@@ -1678,7 +1697,20 @@ export default function SettingsView({ onSaved }) {
             <Plus size={16} /> New Template
           </button>
         </div>
-        <p className="page-subtitle mb-4">Create reusable templates or pick from ready-made ones below.</p>
+        <p className="page-subtitle mb-4">Choose which terms appear on new invoices. Existing invoices keep the terms saved with them.</p>
+
+        <div className="form-group">
+          <label className="form-label" htmlFor="default-invoice-terms">Default terms for new invoices</label>
+          <select id="default-invoice-terms" className="form-input" value={defaultTermsId ?? ''}
+            disabled={defaultTermsId === null || savingDefaultTerms} onChange={e => changeDefaultTerms(e.target.value)}>
+            <option value="">First available template</option>
+            <option value="none">No default terms</option>
+            {defaultTermsId && defaultTermsId !== 'none' && !termsTemplates.some(tpl => tpl.id === defaultTermsId) && (
+              <option value={defaultTermsId} disabled>Selected template was deleted</option>
+            )}
+            {termsTemplates.map(tpl => <option key={tpl.id} value={tpl.id}>{tpl.name}</option>)}
+          </select>
+        </div>
 
         {/* Quick Templates */}
         {!editingTemplate && (
@@ -1715,10 +1747,22 @@ export default function SettingsView({ onSaved }) {
                 placeholder="e.g. Standard Terms, Export Terms" />
             </div>
             <div className="form-group">
-              <label className="form-label">Content (paste your terms here)</label>
-              <textarea rows="8" className="form-input" value={editingTemplate.content}
-                onChange={e => setEditingTemplate({ ...editingTemplate, content: e.target.value })}
-                placeholder="Paste or type your terms & conditions..." />
+              <label className="form-label" htmlFor="terms-template-preset">Start from a preset</label>
+              <select id="terms-template-preset" className="form-input" value="" onChange={async e => {
+                const preset = TERMS_PRESETS.find(item => item.id === e.target.value);
+                if (!preset) return;
+                if (editingTemplate.content.trim() && !await confirmAction({ title: 'Replace template text?', confirmLabel: 'Replace' })) return;
+                setEditingTemplate(current => current && { ...current, name: current.name || preset.label, content: preset.body });
+              }}>
+                <option value="">Choose a business preset</option>
+                {TERMS_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <span className="form-label">Template content</span>
+              <RichEditor toolbar value={editingTemplate.content} label="Template content"
+                onChange={content => setEditingTemplate({ ...editingTemplate, content })}
+                placeholder="Paste or type your terms & conditions…" />
             </div>
             <div className="flex gap-2 justify-end">
               <button type="button" className="btn btn-secondary" onClick={() => setEditingTemplate(null)}>Cancel</button>
@@ -1740,7 +1784,7 @@ export default function SettingsView({ onSaved }) {
                     <button className="icon-btn icon-btn-red" onClick={() => handleDeleteTemplate(tpl.id)} title="Delete"><Trash2 size={14} /></button>
                   </div>
                 </div>
-                <p className="template-card-preview">{tpl.content}</p>
+                <div className="template-card-preview" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(tpl.content || '') }} />
               </div>
             ))}
           </div>

@@ -70,7 +70,7 @@ console.log('\n[#121] Products sample file imports back with zero errors');
   const r = productsCsvToList(PRODUCTS_SAMPLE);
   eq(r.errors, [], 'No errors');
   eq(r.products.length, 2, 'Both example rows');
-  eq([r.products[0].kind, r.products[0].stock, r.products[0].hsn, r.products[0].taxPercent, r.products[0].purchasePrice], [undefined, 50, '4802', 18, 220], 'Goods row: stock, HSN, GST %, purchase price');
+  eq([r.products[0].kind, r.products[0].stock, r.products[0].hsn, r.products[0].taxPercent, r.products[0].purchasePrice], [undefined, 50, '87083000', 18, 220], 'Goods row: stock, HSN, GST %, purchase price');
   eq([r.products[1].kind, 'stock' in r.products[1], r.products[1].unit, r.products[1].sellingPrice, r.products[1].rate], ['service', false, 'Page', 5, 5], 'Service row: no stock, its unit and price');
   eq(productsCsvToList(PRODUCTS_SAMPLE, r.products).skipped, 2, 'Importing it again skips both (same names)');
   // The Products screen's CSV export (InventoryView) imports back.

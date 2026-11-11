@@ -19,14 +19,15 @@ const safeName = (s) => String(s || 'report').replace(/[^A-Za-z0-9 _.-]+/g, '-')
 
 // headers: column titles; rows: arrays of cells (numbers stay numbers).
 // subtitle: one line under the title on the printed page (period, business).
-export default function TableExport({ title, subtitle = '', headers, rows, filename, landscape = false }) {
+export default function TableExport({ title, subtitle = '', headers, rows, filename, landscape = false, serializeCsv }) {
   const empty = !rows || rows.length === 0;
   const name = safeName(filename || title);
   const guard = () => { if (empty) { toast('Nothing to export', 'warning'); return true; } return false; };
 
   const csv = () => {
     if (guard()) return;
-    save(new Blob([[headers, ...rows].map(toCsvLine).join('\n')], { type: 'text/csv;charset=utf-8;' }), `${name}.csv`);
+    const content = serializeCsv ? serializeCsv(rows) : [headers, ...rows].map(toCsvLine).join('\n');
+    save(new Blob([content], { type: 'text/csv;charset=utf-8;' }), `${name}.csv`);
     toast('CSV downloaded', 'success');
   };
   const excel = () => {

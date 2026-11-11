@@ -3,8 +3,8 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { Maximize2, ArrowLeft, Plus, Trash2, Download, UserPlus, Pencil, Settings, ChevronUp, ChevronDown, MessageCircle, Check, Loader, Truck, Printer, Eye, EyeOff, QrCode } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
-import { saveBill, deleteBill, applyStockChanges, getNextInvoiceNumber, typedNumberInSeries, raiseInvoiceCounter, getTermsTemplates, getAllClients, saveClient, getProfile, getAllProducts, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getAllProfiles, getRegionMode, saveRecurring, getAllRecurring, getAllBills, getEnabledModules, getBusinessType } from '../store';
-import { clientPaperPrefs, clientPaperOptions, INVOICE_TYPES, isModuleEnabled, businessKeyOf, GST_DOC_NUMBER, COUNTRIES, deliveryChargeLine, stockEffect, appliedStock, stockDelta, generateEWayBillJSON, formatCurrency, getCountryConfig, getStatesForCountry, getAllUnits, addCustomUnit, removeCustomUnit, getCountriesForRegion, TDS_SECTIONS, TCS_SECTIONS, REMOVED_TCS_SECTIONS, TERMS_PRESETS, getActiveAccounts, getDefaultAccount, getAccountById, getDefaultUnitForMode, filterUnitsByMode, PAPER_SIZES, getPaperSize, computeInvoiceTotals, clientYearToDate, htmlHasText, ORDER_DETAIL_FIELDS, customFieldsOf, invoiceOptionOn, DEFAULT_DECLARATION, decodeGstin, safePageBoundaries, localToday, toLocalIsoDate, parseLocalDate, paymentStatusFor, getStateCode } from '../utils';
+import { saveBill, deleteBill, applyStockChanges, getNextInvoiceNumber, typedNumberInSeries, raiseInvoiceCounter, getTermsTemplates, getDefaultTermsTemplateId, getAllClients, saveClient, getProfile, getAllProducts, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getAllProfiles, getRegionMode, saveRecurring, getAllRecurring, getAllBills, getEnabledModules, getBusinessType } from '../store';
+import { clientPaperPrefs, clientPaperOptions, INVOICE_TYPES, isModuleEnabled, businessKeyOf, GST_DOC_NUMBER, COUNTRIES, deliveryChargeLine, stockEffect, appliedStock, stockDelta, generateEWayBillJSON, formatCurrency, getCountryConfig, getStatesForCountry, getAllUnits, addCustomUnit, removeCustomUnit, getCountriesForRegion, TDS_SECTIONS, TCS_SECTIONS, REMOVED_TCS_SECTIONS, getActiveAccounts, getDefaultAccount, getAccountById, getDefaultUnitForMode, filterUnitsByMode, PAPER_SIZES, getPaperSize, computeInvoiceTotals, clientYearToDate, ORDER_DETAIL_FIELDS, customFieldsOf, invoiceOptionOn, DEFAULT_DECLARATION, decodeGstin, safePageBoundaries, localToday, toLocalIsoDate, parseLocalDate, paymentStatusFor, getStateCode } from '../utils';
 import { getPrintSettings, savePrintSettings } from '../utils/printSettings';
 import { openWhatsAppShare, invoiceShareMessage } from '../utils/share';
 import { confirmAction, promptAction } from './ConfirmModal';
@@ -18,7 +18,7 @@ import InvoiceCurrency from './InvoiceCurrency';
 import PrintPreviewModal from './PrintPreviewModal';
 import { ensureToken, findOrCreateFolder, uploadPDF } from '../services/googleDrive';
 import { isOfflineMode } from '../utils/offlineMode';
-import DOMPurify from 'dompurify';
+import RichEditor from './RichEditor';
 import InvoicePreview from './InvoicePreview';
 import { suggestGstRate, autoFillRate, rateText } from '../utils/hsnRates';
 import HelpButton from './HelpButton';
@@ -28,76 +28,6 @@ import { EInvoiceEditorModal } from './EInvoiceModal';
 import { toast } from './Toast';
 import { phoneDigits, findClientByPhone, newPhoneClient } from '../utils/phoneClients';
 import { changeSize, itemWithUnit, sizeSqft, sizeHasDims, SIZE_STEPS } from '../utils/glass';
-
-// Rich text editor component that works with contentEditable properly
-function RichEditor({ value, onChange, placeholder, toolbar = false }) {
-  const ref = useRef(null);
-  const isInitialized = useRef(false);
-
-  useEffect(() => {
-    if (ref.current && !isInitialized.current) {
-      ref.current.innerHTML = DOMPurify.sanitize(value || '');
-      isInitialized.current = true;
-    }
-  }, []);
-
-  // Update if value changes externally (e.g. draft restore, editing bill)
-  useEffect(() => {
-    if (ref.current && isInitialized.current && ref.current.innerHTML !== value) {
-      ref.current.innerHTML = DOMPurify.sanitize(value || '');
-    }
-  }, [value]);
-
-  const handleInput = useCallback(() => {
-    if (ref.current) {
-      onChange(ref.current.innerHTML);
-    }
-  }, [onChange]);
-
-  // Toolbar formatting via document.execCommand. The existing innerHTML setters above
-  // already wrap user content with DOMPurify.sanitize(), and the toolbar only emits
-  // standard formatting tags that the same sanitizer keeps.
-  const applyFormat = (cmd, val) => {
-    if (ref.current) ref.current.focus();
-    document.execCommand(cmd, false, val);
-    if (ref.current) onChange(ref.current.innerHTML);
-  };
-  const btnStyle = { padding: '0.2rem 0.5rem', fontSize: '0.78rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', cursor: 'pointer', minWidth: '28px' };
-
-  return (
-    <>
-      {toolbar && (
-        <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
-          <button type="button" onClick={() => applyFormat('bold')}        title="Bold (Ctrl+B)"      style={{ ...btnStyle, fontWeight: 700 }}>B</button>
-          <button type="button" onClick={() => applyFormat('italic')}      title="Italic (Ctrl+I)"    style={{ ...btnStyle, fontStyle: 'italic' }}>I</button>
-          <button type="button" onClick={() => applyFormat('underline')}   title="Underline (Ctrl+U)" style={{ ...btnStyle, textDecoration: 'underline' }}>U</button>
-          <span style={{ width: 1, background: 'var(--border-color)', margin: '0 0.2rem' }} />
-          <button type="button" onClick={() => applyFormat('insertUnorderedList')} title="Bullet list"  style={btnStyle}>•&nbsp;List</button>
-          <button type="button" onClick={() => applyFormat('insertOrderedList')}   title="Numbered list" style={btnStyle}>1.&nbsp;List</button>
-          <span style={{ width: 1, background: 'var(--border-color)', margin: '0 0.2rem' }} />
-          <button type="button" onClick={() => applyFormat('formatBlock', '<h4>')}  title="Heading"   style={{ ...btnStyle, fontWeight: 700, fontSize: '0.85rem' }}>H</button>
-          <button type="button" onClick={() => applyFormat('formatBlock', '<p>')}   title="Paragraph" style={btnStyle}>¶</button>
-          <button type="button" onClick={async () => {
-            const url = await promptAction({
-              title: 'Insert link',
-              message: 'Paste the URL to link to. Selected text will become the link.',
-              placeholder: 'https://example.com',
-              confirmLabel: 'Insert',
-            });
-            if (url) applyFormat('createLink', url);
-          }} title="Insert link" style={btnStyle}>🔗</button>
-          <span style={{ width: 1, background: 'var(--border-color)', margin: '0 0.2rem' }} />
-          <button type="button" onClick={() => applyFormat('removeFormat')} title="Clear formatting" style={btnStyle}>✕</button>
-        </div>
-      )}
-      <div ref={ref} contentEditable suppressContentEditableWarning
-        className="form-input rich-editor"
-        onInput={handleInput}
-        style={{ minHeight: '100px', whiteSpace: 'pre-wrap' }}
-        data-placeholder={placeholder} />
-    </>
-  );
-}
 
 // Load draft from sessionStorage
 function loadDraft() {
@@ -805,7 +735,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   // mode: hide the preview so the editor gets the full width during
   // heavy data entry.
   const [previewCollapsed, setPreviewCollapsed] = useState(() => {
-    try { return localStorage.getItem('fgsb_previewCollapsed') === '1'; } catch { return false; }
+    try { return localStorage.getItem('fgsb_previewCollapsed') !== '0'; } catch { return true; }
   });
   useEffect(() => {
     try { localStorage.setItem('fgsb_previewCollapsed', previewCollapsed ? '1' : '0'); } catch { /* sandboxed */ }
@@ -849,8 +779,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   // extra render pass per character was the biggest perf hit in this
   // component per the audit's finding H15.
   const [saving, setSaving] = useState(false);
-  const [termsTemplates, setTermsTemplates] = useState([]);
-  const [selectedTermsId, setSelectedTermsId] = useState(draft?.selectedTermsId || '');
   const [customTerms, setCustomTerms] = useState(draft?.customTerms || '');
   const [customNotes, setCustomNotes] = useState(draft?.customNotes || '');
   const [internalNote, setInternalNote] = useState(draft?.internalNote || '');
@@ -1101,11 +1029,11 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   // during a typing burst.
   useEffect(() => {
     const t = setTimeout(() => {
-      const draftData = { invoiceType, client, details, items, customTerms, customNotes, internalNote, extraSections, selectedTermsId, invoiceOptions, taxInclusive };
+      const draftData = { invoiceType, client, details, items, customTerms, customNotes, internalNote, extraSections, invoiceOptions, taxInclusive };
       try { sessionStorage.setItem('gst_invoiceDraft', JSON.stringify(draftData)); } catch { /* private mode / quota exceeded — skip */ }
     }, 400);
     return () => clearTimeout(t);
-  }, [invoiceType, client, details, items, customTerms, customNotes, internalNote, extraSections, selectedTermsId, invoiceOptions, taxInclusive]);
+  }, [invoiceType, client, details, items, customTerms, customNotes, internalNote, extraSections, invoiceOptions, taxInclusive]);
 
   // Mark initialized after first render cycle so auto-save doesn't trigger on load
   useEffect(() => {
@@ -1301,13 +1229,14 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   // Load terms templates and saved clients
   useEffect(() => {
     getAllProfiles().then(p => { setAllProfiles(p); if (!activeProfile && p.length > 0) setActiveProfile(profileProp); }).catch(() => {});
-    getTermsTemplates().then(templates => {
-      setTermsTemplates(templates);
-      if (templates.length > 0 && blankNewInvoice.current && !selectedTermsId) {
-        setSelectedTermsId(templates[0].id);
-        setCustomTerms(templates[0].content);
-      }
-    });
+    if (blankNewInvoice.current) {
+      Promise.all([getTermsTemplates(), getDefaultTermsTemplateId().catch(() => '')])
+        .then(([templates, defaultId]) => {
+          if (defaultId === 'none') return;
+          const template = defaultId ? templates.find(t => t.id === defaultId) : templates[0];
+          setCustomTerms(template?.content || '');
+        }).catch(() => {});
+    }
     getAllClients().then(clients => {
       setSavedClients(clients);
       // Auto-link if editing a bill with a known client
@@ -1795,12 +1724,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
     // no stale-closure risk from items.length; the guard reads current.
     setItems(prev => prev.length > 1 ? prev.filter(item => item.id !== id) : prev);
   }, []);
-
-  const handleTermsSelect = (templateId) => {
-    setSelectedTermsId(templateId);
-    const tpl = termsTemplates.find(t => t.id === templateId);
-    if (tpl) setCustomTerms(tpl.content);
-  };
 
   const selectSavedClient = (cli) => {
     // Spread the FULL client — earlier versions cherry-picked six fields
@@ -3656,9 +3579,10 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
           onSaveIrn={saveEinvoice} onClose={() => setShowEinvoice(false)} />
       )}
       <div className="generator-toolbar">
-        <div className="flex gap-2 items-center">
-          <button className="btn btn-secondary" onClick={handleBack}><ArrowLeft size={18} /> Back</button>
-          <HelpButton title="Invoice Generator — how to use" doc="invoices" />
+        <div className="invoice-command-row">
+        <div className="invoice-workspace-heading">
+          <button className="btn btn-secondary" onClick={handleBack} aria-label="Back" title="Back"><ArrowLeft size={16} /></button>
+          <h1>{editingBill && !editingBill._isDuplicate ? 'Invoice Editor' : 'New Invoice'}</h1>
           {/* v1.10.37 — Auto-save status pill. Reported: prior plain
               grey text next to Back button looked unstyled. Now it's a
               proper chip with a coloured dot indicator that matches
@@ -3697,7 +3621,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             };
             return (
               <button type="button" onClick={onClick} disabled={!isDraft}
-                title={isDraft ? 'Click to focus the first missing field' : label}
+                className="invoice-save-status" aria-label={label}
+                title={isDraft ? 'Draft: click to focus the first missing field' : label}
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   fontSize: '0.75rem', fontWeight: 600,
@@ -3717,14 +3642,11 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     boxShadow: isDraft ? `0 0 0 3px ${color}33` : 'none',
                   }} />
                 )}
-                {label}
+                {isDraft ? 'Draft' : saved ? 'Saved' : label}
               </button>
             );
           })()}
-          <HelpButton title="Saving as you go" doc="invoices#autosave" size={16} />
         </div>
-        {/* v1.10.83 - wraps onto a second line on a narrower screen; it ran off
-            the right edge at 900-1100px and hid Customize and the preview button. */}
         <div className="flex gap-2 generator-actions">
           {/* v1.10.37 — Explicit Save button. Reported: "invoice page
               needs a Save button". Previously only Download PDF was
@@ -3757,32 +3679,32 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             }
           }} disabled={saving}
           title="Save the invoice without downloading (Ctrl+S)">
-            <Check size={18} /> {saving ? 'Saving…' : 'Save'}
+            <Check size={18} /> {saving ? 'Saving…' : 'Save'} <kbd className="workspace-key" aria-hidden="true">Ctrl+S</kbd>
           </button>
           <button className="btn btn-secondary" onClick={generatePDF} disabled={saving}
-            title="Save + download the PDF">
-            <Download size={18} /> {saving ? 'Generating...' : 'Save & Download'}
+            title="Save and download the PDF (Ctrl+P)">
+            <Download size={18} /> {saving ? 'Generating...' : 'Save & Download'} <kbd className="workspace-key" aria-hidden="true">Ctrl+P</kbd>
           </button>
-          <button className="btn btn-secondary" onClick={directPrint} disabled={saving}
+          <button className="btn btn-secondary invoice-action-compact" aria-label="Print" onClick={directPrint} disabled={saving}
             title={
               isThermalPaper()
                 ? 'Send directly to your thermal printer'
                 : 'Open browser print dialog (skip the PDF download)'
             }>
-            <Printer size={18} /> Print
+            <Printer size={18} /> <span className="invoice-action-label">Print</span>
           </button>
-          <button className="btn btn-secondary" onClick={shareWhatsApp} disabled={saving} style={{ background: '#25d366', color: '#fff', borderColor: '#25d366' }}>
-            <MessageCircle size={18} /> WhatsApp
+          <button className="btn btn-secondary invoice-action-compact" aria-label="WhatsApp" title="Share via WhatsApp" onClick={shareWhatsApp} disabled={saving} style={{ background: '#25d366', color: '#fff', borderColor: '#25d366' }}>
+            <MessageCircle size={18} /> <span className="invoice-action-label">WhatsApp</span>
           </button>
           {ewayOn && (invoiceType === 'tax-invoice' || invoiceType === 'delivery-challan') && (
-            <button className="btn btn-secondary" onClick={exportEWayBill} disabled={saving} title="Download E-Way Bill JSON for NIC portal upload">
-              <Truck size={18} /> E-Way Bill
+            <button className="btn btn-secondary invoice-action-compact" aria-label="E-Way Bill" onClick={exportEWayBill} disabled={saving} title="Download E-Way Bill JSON for NIC portal upload">
+              <Truck size={18} /> <span className="invoice-action-label">E-Way Bill</span>
             </button>
           )}
           {einvoiceOn && (invoiceType === 'tax-invoice' || invoiceType === 'credit-note') && (
-            <button className="btn btn-secondary" onClick={() => setShowEinvoice({ saved: !!savedId.current })} disabled={saving}
+            <button className="btn btn-secondary invoice-action-compact" aria-label="E-invoice" onClick={() => setShowEinvoice({ saved: !!savedId.current })} disabled={saving}
               title="Download the e-invoice JSON, or paste the IRN the portal gave">
-              <QrCode size={18} /> E-invoice{einvoice?.irn ? ' ✓' : ''}
+              <QrCode size={18} /> <span className="invoice-action-label">E-invoice{einvoice?.irn ? ' ✓' : ''}</span>
             </button>
           )}
           {/* v1.10.65 — requested (#58 item 2, @sangwanmail-eng): "to access
@@ -3799,7 +3721,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
               with - both change how the invoice looks, so both are reachable
               from anywhere on a long invoice. The options panel it opens has
               not moved. */}
-          <button className="btn btn-secondary" type="button"
+          <button className="btn btn-secondary invoice-action-compact" type="button"
+            aria-label={showOptions ? 'Hide Options' : 'Customize'}
             onClick={() => {
               const open = !showOptions;
               setShowOptions(open);
@@ -3809,14 +3732,25 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
               if (open) setTimeout(() => document.getElementById('invoice-options-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
             }}
             title={showOptions ? 'Hide the layout and column options' : 'Choose columns, sections, paper size and PDF style'}>
-            <Settings size={18} /> {showOptions ? 'Hide Options' : 'Customize'}
+            <Settings size={18} /> <span className="invoice-action-label">{showOptions ? 'Hide Options' : 'Customize'}</span>
           </button>
-          <button className="btn btn-secondary" type="button"
+          <button className="btn btn-secondary invoice-action-compact" type="button"
+            aria-label={previewCollapsed ? 'Show Preview' : 'Hide Preview'}
             onClick={() => setPreviewCollapsed(v => !v)}
             title={previewCollapsed ? 'Show the live preview' : 'Hide the preview and use the full width for entry'}>
-            {previewCollapsed ? <><Eye size={18} /> Show Preview</> : <><EyeOff size={18} /> Hide Preview</>}
+            {previewCollapsed ? <Eye size={18} /> : <EyeOff size={18} />}
+            <span className="invoice-action-label">{previewCollapsed ? 'Show Preview' : 'Hide Preview'}</span>
           </button>
         </div>
+        </div>
+        <nav className="invoice-section-nav" aria-label="Invoice sections">
+          {[
+            ['invoice-customer', 'Customer'], ['invoice-details', 'Details'],
+            ['invoice-items', 'Line items'], ['invoice-totals', 'Totals'],
+          ].map(([id, label]) => (
+            <button type="button" key={id} onClick={() => document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' })}>{label}</button>
+          ))}
+        </nav>
       </div>
 
       <div className={`split-view ${previewCollapsed ? 'split-view-focus' : ''}`}>
@@ -3827,53 +3761,22 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
               picker here only made it possible to issue the invoice from a
               company other than the one on screen. */}
           {/* Invoice Type */}
-          <div className="glass-panel p-6 mb-6">
-            {/* v1.10.69 (#71 item 1) - Customize moved up to the sticky
-                toolbar. Two buttons doing the same thing would only raise the
-                question of whether they do. */}
-            <div className="flex justify-between items-center">
-              <h3 className="section-title" style={{ margin: 0 }}>Invoice Type <HelpButton title="Invoice Type" doc="invoices#invoice-types" size={16} /></h3>
-            </div>
-            <div className="type-selector" style={{ marginTop: '0.75rem' }}>
-              {Object.entries(INVOICE_TYPES).map(([key, val]) => (
-                <button key={key} type="button"
-                  className={`type-chip ${invoiceType === key ? 'type-chip-active' : ''}`}
-                  disabled={isIssuedInvoice && invoiceType !== key}
-                  title={isIssuedInvoice ? 'The type cannot change once an invoice is saved. Duplicate it to make a different document.' : val.description}
-                  onClick={() => handleTypeChange(key)}>{val.label}</button>
-              ))}
-            </div>
-            {isIssuedInvoice && (
-              <p className="type-desc" style={{ color: 'var(--text-muted)' }}>
-                Saved as a {typeConfig?.label || invoiceType}. The type stays fixed so the number series and tax treatment keep matching what the customer already has - use Duplicate to raise a different document.
-              </p>
-            )}
-            <p className="type-desc">{typeConfig?.description}</p>
-
-            {/* Goods / Services / Mixed selector — drives default line-item unit
-                (Hrs vs Nos) and filters the unit dropdown. Stays out of the way
-                for users who never touch services. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginRight: '0.25rem' }}>This invoice is for: <HelpButton title="Goods, services or both" doc="invoices#goods-services" size={16} /></span>
-              {[
-                { id: 'goods',    label: '📦 Goods',    desc: 'Physical products — defaults to Nos / Kg / Pcs units' },
-                { id: 'services', label: '⏱ Services', desc: 'Time / work-based — defaults to Hrs and surfaces Session / Visit / Month units' },
-                { id: 'mixed',    label: '🔀 Mixed',   desc: 'Both — full unit list available, no filtering' },
-              ].map(opt => (
-                <button key={opt.id} type="button"
-                  className={`type-chip ${(invoiceOptions.invoiceMode || 'goods') === opt.id ? 'type-chip-active' : ''}`}
-                  // v1.10.83 - a service has no unit to print, unless the unit was set by hand.
-                  onClick={() => setInvoiceOptions(prev => ({ ...prev, invoiceMode: opt.id, ...(prev.showItemUnitManual ? {} : { showItemUnit: opt.id !== 'services' }) }))}
-                  title={opt.desc}
-                  style={{ fontSize: '0.78rem', padding: '0.3rem 0.6rem' }}>
-                  {opt.label}
-                </button>
-              ))}
-              {invoiceOptions.invoiceMode === 'services' && (
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                  💡 Use a <strong>SAC code</strong> (services accounting code) in the HSN field
-                </span>
-              )}
+          <div className="glass-panel invoice-type-panel">
+            <div className="invoice-type-row">
+              <h3 id="invoice-type-label" className="section-title">Invoice Type</h3>
+              <div className="type-selector" role="group" aria-labelledby="invoice-type-label">
+                {Object.entries(INVOICE_TYPES).map(([key, val]) => (
+                  <button key={key} type="button"
+                    className={`type-chip ${invoiceType === key ? 'type-chip-active' : ''}`}
+                    aria-label={val.label} aria-pressed={invoiceType === key}
+                    disabled={isIssuedInvoice && invoiceType !== key}
+                    title={isIssuedInvoice ? 'Duplicate this invoice to change its type.' : `${val.label}: ${val.description}`}
+                    onClick={() => handleTypeChange(key)}>
+                    {key === 'bill-of-supply' ? 'Bill of Supply' : key === 'composition' ? 'Composition' : val.label}
+                  </button>
+                ))}
+              </div>
+              <HelpButton title="Invoice Type" doc="invoices#invoice-types" size={16} />
             </div>
 
             {/* Customization Options */}
@@ -4382,8 +4285,9 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
           {/* Client Modal */}
           <ClientModal show={showClientModal} onClose={() => setShowClientModal(false)} onSave={handleClientModalSave} client={modalClient} isEditing={isEditingClient} defaultCountry={profile?.country} />
 
+          <div className="invoice-document-grid">
           {/* Client Details */}
-          <div className="glass-panel p-6 mb-6">
+          <div className="glass-panel invoice-document-card" id="invoice-customer">
             <div className="flex justify-between items-center mb-4">
               <h3 className="section-title" style={{ margin: 0 }}>Billed To <HelpButton title="Billed To" doc="invoices#billed-to" size={16} /></h3>
             </div>
@@ -4612,7 +4516,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
           </div>
 
           {/* Invoice Details */}
-          <div className="glass-panel p-6 mb-6">
+          <div className="glass-panel invoice-document-card" id="invoice-details">
             <h3 className="section-title">Invoice Details <HelpButton title="Invoice Details" doc="invoices#details" size={16} /></h3>
             <div className="grid grid-cols-2 gap-4">
               <div className="form-group">
@@ -4876,9 +4780,11 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             </div>
           </div>
 
+          </div>
+
           {/* Line Items */}
-          <div className="glass-panel p-6 mb-6">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <div className="glass-panel p-6 mb-6 invoice-line-panel" id="invoice-items">
+            <div className="invoice-line-heading">
               <h3 className="section-title" style={{ margin: 0 }}>Line Items <HelpButton title="Line Items" doc="invoices#items" size={16} /></h3>
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               {showGST && (
@@ -4930,7 +4836,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
               />
             ))}
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <button className="btn btn-secondary mt-2" onClick={addItem}><Plus size={18} /> Add Item</button>
+              <button className="btn btn-secondary mt-2" onClick={addItem}><Plus size={18} /> Add Item <kbd className="workspace-key" aria-hidden="true">Ctrl+Enter</kbd></button>
               {!hasDeliveryCharge && !servicesMode && (
                 <button type="button" className="btn btn-secondary mt-2" onClick={addDeliveryCharge}
                   title="Adds a 'Delivery charges' line, taxed at the goods' GST rate (composite supply)">
@@ -4975,103 +4881,21 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             )}
           </div>
 
-          {/* Terms */}
+          <section className="glass-panel invoice-totals" id="invoice-totals" aria-label="Invoice totals">
+            <div className="invoice-totals-detail">
+              <h3 className="section-title">Invoice totals</h3>
+              <dl>
+                <div><dt>{showGST ? 'Taxable amount' : 'Line amount'}</dt><dd>{formatCurrency(totals.taxableAmount, invoiceOptions.currency || baseCurrency)}</dd></div>
+                {showGST && <div><dt>{taxLabel || 'GST'}</dt><dd>{formatCurrency(totals.totalTaxAmount, invoiceOptions.currency || baseCurrency)}</dd></div>}
+                {!!totals.invoiceDiscountAmount && <div><dt>Invoice discount</dt><dd>−{formatCurrency(totals.invoiceDiscountAmount, invoiceOptions.currency || baseCurrency)}</dd></div>}
+                {!!totals.tcsAmount && <div><dt>TCS</dt><dd>{formatCurrency(totals.tcsAmount, invoiceOptions.currency || baseCurrency)}</dd></div>}
+                {!!totals.roundOff && <div><dt>Round off</dt><dd>{formatCurrency(totals.roundOff, invoiceOptions.currency || baseCurrency)}</dd></div>}
+              </dl>
+            </div>
+            <div className="invoice-total-amount"><span>Invoice total</span><strong>{formatCurrency(totals.total, invoiceOptions.currency || baseCurrency)}</strong></div>
+          </section>
+
           <div className="glass-panel p-6 mb-6">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <h3 className="section-title" style={{ margin: 0 }}>Terms & Conditions <HelpButton title="Terms & Conditions" doc="invoices#terms-notes" size={16} /></h3>
-                {/* v1.10.84 - the same switch as Customize → Terms & Conditions, where people look for it. */}
-                <PrintToggle optKey="showTerms" label="Print on invoice" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} />
-              </div>
-              {/* v1.10.37 — Terms rendering mode picker. Reported: PDF was
-                  showing terms as compact all-caps run-together block —
-                  users wanted an option for normal formatted output too.
-                  Compact = tiny 0.6rem, honours global allCaps, saves
-                  paper on invoices where terms are boilerplate.
-                  Formatted = 0.78rem, mixed case, list styles preserved,
-                  reads like a document paragraph. */}
-              <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>PDF layout <HelpButton title="PDF layout: Compact or Formatted" doc="invoices#terms-layout" size={16} /></span>
-                {[
-                  { id: 'compact', label: 'Compact', hint: 'Tiny footer text — saves paper' },
-                  { id: 'formatted', label: 'Formatted', hint: 'Larger readable paragraphs' },
-                ].map(mode => {
-                  // v1.10.74 - same rule InvoicePreview prints with: per-invoice
-                  // choice, then Print Settings, then services -> formatted.
-                  const effectiveMode = invoiceOptions.termsFormatMode || _psPrintForRates.termsFormatMode
-                    || ((invoiceOptions.invoiceMode || 'goods') === 'services' ? 'formatted' : 'compact');
-                  const active = effectiveMode === mode.id;
-                  return (
-                    <button key={mode.id} type="button"
-                      onClick={() => setInvoiceOptions(prev => ({ ...prev, termsFormatMode: mode.id }))}
-                      title={mode.hint}
-                      style={{
-                        fontSize: '0.72rem', fontWeight: 600,
-                        padding: '0.28rem 0.65rem', borderRadius: 999,
-                        background: active
-                          ? 'linear-gradient(135deg, var(--primary), var(--primary-darker))'
-                          : 'var(--bg-secondary)',
-                        color: active ? '#fff' : 'var(--text)',
-                        border: active ? '1px solid transparent' : '1px solid var(--border)',
-                        cursor: 'pointer', transition: 'all 0.15s',
-                      }}>
-                      {mode.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: termsTemplates.length > 0 ? '1fr 1fr' : '1fr', gap: '0.75rem', marginBottom: '0.5rem' }}>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Insert preset (by business type)</label>
-                <select className="form-input" defaultValue=""
-                  onChange={async (e) => {
-                    if (!e.target.value) return;
-                    const preset = TERMS_PRESETS.find(p => p.id === e.target.value);
-                    if (!preset) return;
-                    // P2 #33 — "never ask again" via sessionStorage flag.
-                    // Users iterating through 3 presets to compare shouldn't
-                    // see 3 confirm dialogs. Ask once per session; subsequent
-                    // presets swap silently until they close the tab.
-                    if (htmlHasText(customTerms)) {
-                      const skipConfirm = sessionStorage.getItem('gst_termsPresetConfirmed') === '1';
-                      if (!skipConfirm) {
-                        const proceed = await confirmAction({
-                          title: 'Replace current Terms?',
-                          message: 'Your existing Terms text will be lost. Subsequent preset swaps this session will happen silently — this confirmation is shown once.',
-                          confirmLabel: 'Replace',
-                          tone: 'warning',
-                        });
-                        if (!proceed) { e.target.value = ''; return; }
-                        try { sessionStorage.setItem('gst_termsPresetConfirmed', '1'); } catch { /* ignore */ }
-                      }
-                    }
-                    setCustomTerms(preset.body);
-                    setSelectedTermsId('');
-                    e.target.value = '';
-                    if (preset.body) toast(`Inserted "${preset.label}" preset`, 'success');
-                  }}>
-                  <option value="">— Pick a business type —</option>
-                  {TERMS_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-                </select>
-                <small style={{ color: '#94a3b8', fontSize: '0.7rem' }}>India-specific starter wording. Edit freely.</small>
-              </div>
-              {termsTemplates.length > 0 && (
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Load saved template</label>
-                  <select className="form-input" value={selectedTermsId} onChange={(e) => handleTermsSelect(e.target.value)}>
-                    <option value="">— Custom —</option>
-                    {termsTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                </div>
-              )}
-            </div>
-            <div className="form-group">
-              <label className="form-label">Terms (appears on invoice — supports rich formatting)</label>
-              <RichEditor toolbar value={customTerms}
-                onChange={(v) => { setCustomTerms(v); setSelectedTermsId(''); }}
-                placeholder="Enter or paste your terms & conditions..." />
-            </div>
             <div className="form-group">
               <div className="label-with-toggle"><label className="form-label">Notes / Remarks (optional)</label><PrintToggle optKey="showNotes" label="Print on invoice" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /></div>
               <RichEditor toolbar value={customNotes}

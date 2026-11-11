@@ -21,11 +21,11 @@ const download = (text, name) => {
 // what: 'products' | 'clients'. parse(rows) -> { list, updates?, skipped, errors }
 // (updates: saved items with empty details filled in, #134).
 // save(item) saves one. intro: what the columns are.
-export default function CsvListImport({ what, sample, sampleName, doc, intro, parse, save, onClose, onDone }) {
+export default function CsvListImport({ what, sample, sampleName, doc, intro, parse, save, onClose, onDone, requireValid = false }) {
   const [plan, setPlan] = useState(null); // { fileName, sheets, at, list, updates, skipped, errors }
   const [busy, setBusy] = useState(false);
 
-  const read = (fileName, sheets, at) => ({ fileName, sheets, at, updates: [], ...parse(sheets[at].rows) });
+  const read = (fileName, sheets, at) => ({ fileName, sheets, at, updates: [], busySource: sheets[at].busy === true, ...parse(sheets[at].rows) });
 
   const pickFile = async (e) => {
     const file = e.target.files?.[0];
@@ -40,6 +40,7 @@ export default function CsvListImport({ what, sample, sampleName, doc, intro, pa
   };
 
   const runImport = async () => {
+    if (requireValid && plan.errors.length) return;
     setBusy(true);
     let saved = 0;
     try {
@@ -65,7 +66,7 @@ export default function CsvListImport({ what, sample, sampleName, doc, intro, pa
         </div>
         <p className="text-muted" style={{ fontSize: '0.85rem' }}>{intro} A name already in your list is never added twice, so importing the same file again is safe.</p>
         <p className="text-muted" style={{ fontSize: '0.85rem' }}>
-          Choose a CSV, an Excel file (.xlsx, such as Vyapar's {what === 'clients' ? 'party' : 'item'} export) or a Tally file
+          Choose a BUSY XML export (.DAT), a CSV, an Excel file (.xlsx, such as Vyapar's {what === 'clients' ? 'party' : 'item'} export) or a Tally file
           (in Tally: <b>Gateway of Tally &gt; Export &gt; Masters</b>, format <b>XML</b>; {what === 'clients' ? 'ledgers under Sundry Debtors and Sundry Creditors come in' : 'stock items come in with HSN, GST rate and unit'}).
         </p>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
@@ -74,8 +75,8 @@ export default function CsvListImport({ what, sample, sampleName, doc, intro, pa
             <Download size={15} /> Download sample file
           </button>
           <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
-            <Upload size={15} /> Choose file
-            <input type="file" accept=".csv,text/csv,.xlsx,.xml" onChange={pickFile} style={{ display: 'none' }} />
+            <Upload size={15} /> Choose file (including BUSY .DAT)
+            <input type="file" accept=".csv,text/csv,.xlsx,.xml,.dat" onChange={pickFile} style={{ display: 'none' }} />
           </label>
         </div>
         {plan && (
@@ -90,9 +91,20 @@ export default function CsvListImport({ what, sample, sampleName, doc, intro, pa
             <strong>{plan.fileName}</strong>: {plan.list.length} new to add
             {plan.updates.length > 0 && <> · {plan.updates.length} already saved: their empty details are filled in, nothing already filled is changed</>}
             {plan.skipped > 0 && <> · {plan.skipped} already in your list (skipped)</>}
+            {plan.busySource && <p>{what === 'products' ? 'BUSY opening stock is excluded because it is not a current stock count. Selling prices are only imported when supplied explicitly.' : 'Customer and supplier contact details are imported. Opening balances and other ledger accounts are excluded.'}</p>}
+            {requireValid && [['New products', plan.list], ['Products to update', plan.updates]].map(([label, items]) => items.length > 0 && (
+              <details key={label}>
+                <summary>{label} ({items.length})</summary>
+                <ul style={{ maxHeight: 150, overflowY: 'auto' }}>
+                  {items.map(item => <li key={item.id || item.name}>{item.name}{item.partNo ? ` · ${item.partNo}` : ''}</li>)}
+                </ul>
+              </details>
+            ))}
             {plan.errors.length > 0 && (
               <>
-                <p style={{ color: 'var(--danger)', margin: '0.5rem 0 0.25rem' }}>{plan.errors.length} row{plan.errors.length === 1 ? '' : 's'} with a problem (not imported; fix the file and choose it again):</p>
+                <p style={{ color: 'var(--danger)', margin: '0.5rem 0 0.25rem' }}>
+                  {requireValid ? 'Import blocked. Fix these errors and choose the file again.' : `${plan.errors.length} row(s) with a problem will be skipped.`}
+                </p>
                 <ul style={{ margin: 0, paddingLeft: '1.1rem', maxHeight: 150, overflowY: 'auto' }}>
                   {plan.errors.slice(0, 50).map((e) => <li key={e}>{e}</li>)}
                 </ul>
@@ -106,7 +118,7 @@ export default function CsvListImport({ what, sample, sampleName, doc, intro, pa
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
           <button type="button" className="btn btn-secondary" onClick={close} disabled={busy}>Close</button>
-          <button type="button" className="btn btn-primary" onClick={runImport} disabled={busy || !n}>
+          <button type="button" className="btn btn-primary" onClick={runImport} disabled={busy || !n || (requireValid && !!plan?.errors.length)}>
             {busy ? 'Importing…' : `Import ${n || ''}`.trim()}
           </button>
         </div>

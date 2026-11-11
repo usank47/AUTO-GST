@@ -17,6 +17,7 @@ import {
   newProductsFromBills,
 } from '../utils/bulkCsv';
 import { fileToSheets, bestSheet } from '../utils/importFile';
+import { busyVoucherPlan } from '../utils/busyImport';
 import { toast } from './Toast';
 import HelpButton from './HelpButton';
 
@@ -35,12 +36,22 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
   const [addClients, setAddClients] = useState(true);
   const [addProducts, setAddProducts] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [confirmedBusy, setConfirmedBusy] = useState(false);
   const close = () => { if (!busy) { setOpen(false); setPlan(null); } };
 
   // Reads everything the conversion needs and works out what the file holds.
   // at: the sheet to read (undefined: the one with the most ready).
   const preview = async (fileName, sheets, at, stock = adjustStock) => {
     const profile = await getProfile().catch(() => ({}));
+    if (sheets[0].busy) {
+      const [existingBills, existingPurchases, clients] = await Promise.all([
+        sales ? getAllBills() : [], sales ? [] : getAllPurchases(), sales ? getAllClients() : [],
+      ]);
+      setPlan({ fileName, sheets, at: 0, busySource: true, result: busyVoucherPlan(sheets[0].busy, kind, {
+        profile, existingIds: new Set(existingBills.map(b => b.id)), existing: existingPurchases.filter(p => belongsToProfile(p, profile)), clients,
+      }) });
+      return;
+    }
     let convert;
     if (sales) {
       const [bills, products, clients] = await Promise.all([getAllBills(), getAllProducts().catch(() => []), getAllClients().catch(() => [])]);
@@ -62,6 +73,8 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setConfirmedBusy(false);
+    setPlan(null);
     try {
       await preview(file.name, await fileToSheets(file, kind));
     } catch (err) {
@@ -90,7 +103,7 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
   };
 
   const runImport = async () => {
-    if (!plan) return;
+    if (!plan || (plan.busySource && !confirmedBusy)) return;
     setBusy(true);
     let saved = 0;
     let taken = 0;
@@ -117,7 +130,7 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
           // #170: new items of the saved invoices go into Products too.
           // Review M2: the product list must be read, or every item would look new
           // (duplicates); then products are left as they are, and the user is told.
-          if (addProducts && savedBills.length) {
+          if (addProducts && savedBills.length && !plan.busySource) {
             const have = await getAllProducts().catch(() => null);
             if (have) {
               for (const p of newProductsFromBills(savedBills, have)) await saveProduct(p).catch(() => {});
@@ -126,7 +139,12 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
             }
           }
         }
-        if (addClients) for (const c of plan.result.newClients) await saveClient({ ...c }).catch(() => {});
+        if (addClients && !plan.busySource) for (const c of plan.result.newClients) await saveClient({ ...c }).catch(() => {});
+      } else if (plan.busySource) {
+        for (const purchase of plan.result.purchases) {
+          await savePurchase(purchase);
+          saved += 1;
+        }
       } else {
         // As when a bill is typed in: quantities go into product stock, and a
         // new item becomes a product (Purchases > save does the same).
@@ -191,11 +209,11 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
               </button>
               <button type="button" className="btn btn-secondary" onClick={exportAll}><Download size={15} /> Export all as CSV</button>
               <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
-                <Upload size={15} /> Choose CSV or Excel file
-                <input type="file" accept=".csv,text/csv,.xlsx" onChange={pickFile} style={{ display: 'none' }} />
+                <Upload size={15} /> Choose CSV, Excel or BUSY .DAT
+                <input type="file" accept=".csv,text/csv,.xlsx,.dat" onChange={pickFile} style={{ display: 'none' }} />
               </label>
             </div>
-            {sales && (
+            {sales && !plan?.busySource && (
               <div style={{ display: 'grid', gap: '0.35rem', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
                 <label><input type="checkbox" checked={adjustStock} onChange={(e) => { setAdjustStock(e.target.checked); if (plan) preview(plan.fileName, plan.sheets, plan.at, e.target.checked); }} /> Take sold quantities out of product stock (leave off for old invoices)</label>
                 <label><input type="checkbox" checked={addClients} onChange={(e) => setAddClients(e.target.checked)} /> Add new clients to Clients</label>
@@ -213,8 +231,12 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
                 )}
                 <strong>{plan.fileName}</strong>: {ready} {sales ? 'invoice' : 'bill'}{ready === 1 ? '' : 's'} ready
                 {r.skipped.length > 0 && <> · {r.skipped.length} already there (skipped)</>}
-                {sales && r.newClients.length > 0 && <> · {r.newClients.length} new client{r.newClients.length === 1 ? '' : 's'}</>}
+                {sales && !plan.busySource && r.newClients.length > 0 && <> · {r.newClients.length} new client{r.newClients.length === 1 ? '' : 's'}</>}
                 {(r.warnings || []).map((w) => <p key={w} style={{ color: 'var(--warning, #b45309)', margin: '0.5rem 0 0' }}>{w}</p>)}
+                {plan.busySource && ready > 0 && (
+                  <label style={{ display: 'block', marginTop: '0.5rem' }}><input type="checkbox" checked={confirmedBusy}
+                    onChange={e => setConfirmedBusy(e.target.checked)} /> Import the reconciled vouchers. I’ll review payment balances separately.</label>
+                )}
                 {r.errors.length > 0 && (
                   <>
                     <p style={{ color: 'var(--danger)', margin: '0.5rem 0 0.25rem' }}>{r.errors.length} problem{r.errors.length === 1 ? '' : 's'} (these are not imported; fix the file and choose it again):</p>
@@ -227,7 +249,7 @@ export default function BulkCsvImport({ kind = 'sales', onDone }) {
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
               <button type="button" className="btn btn-secondary" onClick={close} disabled={busy}>Close</button>
-              <button type="button" className="btn btn-primary" onClick={runImport} disabled={busy || !ready}>
+              <button type="button" className="btn btn-primary" onClick={runImport} disabled={busy || !ready || (plan?.busySource && !confirmedBusy)}>
                 {busy ? 'Importing…' : `Import ${ready || ''}`.trim()}
               </button>
             </div>

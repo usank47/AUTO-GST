@@ -5,6 +5,7 @@
 import { parseCsv } from './bulkCsv.js';
 import { readXlsx } from './xlsxRead.js';
 import { tallyMastersToRows } from './tallyXml.js';
+import { parseBusyFile, busyMasterRows } from './busyImport.js';
 
 const TALLY = {
   clients: ['clients', 'Tally ledgers (parties)', 'This Tally file has no ledgers under Sundry Debtors or Sundry Creditors.'],
@@ -16,6 +17,13 @@ export async function fileToSheets(file, what) {
   const ext = (/\.([a-z0-9]+)$/i.exec(file.name || '') || [])[1]?.toLowerCase();
   if (ext === 'xls') throw new Error('Old .xls files cannot be read. In Excel, use File > Save As > Excel Workbook (.xlsx) or CSV.');
   if (ext === 'xlsx') return readXlsx(new Uint8Array(await file.arrayBuffer()));
+  if (ext === 'dat') {
+    const root = parseBusyFile(new Uint8Array(await file.arrayBuffer()));
+    if (what === 'products' || what === 'clients') {
+      return [{ name: 'BUSY masters', rows: busyMasterRows(root, what), busy: true }];
+    }
+    return [{ name: 'BUSY vouchers', rows: [], busy: root }];
+  }
   if (ext === 'xml') {
     const t = TALLY[what];
     if (!t) throw new Error('A Tally file holds clients and products: import it in Clients or Products (Import).');
@@ -23,7 +31,7 @@ export async function fileToSheets(file, what) {
     if (rows.length < 2) throw new Error(t[2]);
     return [{ name: t[1], rows }];
   }
-  return [{ name: file.name, rows: parseCsv(await file.text()) }];
+  return [{ name: file.name, rows: parseCsv(await file.text(), { keepEmptyRows: what === 'products' }) }];
 }
 
 const hasRows = (s) => s.rows.filter((r) => r.some((c) => String(c ?? '').trim() !== '')).length >= 2;

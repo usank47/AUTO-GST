@@ -535,7 +535,7 @@ function App() {
     dashboard: { icon: Home, label: 'Dashboard' },
     new: { icon: Plus, label: 'New Invoice', onClick: handleNewInvoice },
     clients: { icon: Users, label: 'Clients' },
-    inventory: { icon: Package, label: 'Products' },
+    inventory: { icon: Package, label: 'Parts Catalogue' },
     expenses: { icon: Wallet, label: 'Expenses' },
     purchases: { icon: ShoppingCart, label: 'Purchases' },
     recurring: { icon: RefreshCw, label: 'Recurring' },
@@ -670,6 +670,7 @@ function App() {
     };
     const settingsJumps = [
       ['Company profile', 'section-company'], ['Payment accounts', 'section-company'],
+      ['Terms & Conditions Templates', 'section-terms'],
       ['Print & PDF Settings', 'section-print'], ['PDF Style Editor', 'section-print'],
       ['Business type presets', 'section-print'], ['Section labels', 'section-print'],
       ['Watermarks', 'section-print'], ['Multi-copy print', 'section-print'],
@@ -910,7 +911,7 @@ function App() {
           aria-label="Open menu" aria-expanded={navOpen}>
           <Menu size={22} />
         </button>
-        <span className="mobile-topbar-title">GST Billing</span>
+        <span className="mobile-topbar-title">AUTO-GST</span>
         <span className="mobile-topbar-business">{profile?.businessName || ''}</span>
         <button type="button" className="topbar-btn" onClick={() => setShowShortcutsHelp(true)} title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts"><Command size={18} /></button>
           {topActions}
@@ -926,7 +927,7 @@ function App() {
           {/* "by DiceCodes" always stays, under their name too. "Free forever" is
               in the top bar; on a phone (no top bar) it stays here. */}
           <div className="sidebar-brand-text">
-            <h2 className={`sidebar-title${ownBrand ? ' sidebar-title-own' : ''}`} title={ownBrand ? `${brand.businessName} - Free GST Billing` : undefined}>{ownBrand ? brand.businessName : 'GST Billing'}</h2>
+            <h2 className={`sidebar-title${ownBrand ? ' sidebar-title-own' : ''}`} title={ownBrand ? `${brand.businessName} - Free GST Billing` : undefined}>{ownBrand ? brand.businessName : 'AUTO-GST'}</h2>
             <p className="sidebar-subtitle" title="Free forever. Works on this computer, even offline. No tracking, no ads."><span className="sidebar-free sidebar-free-phone">Free forever<br /></span>by DiceCodes</p>
           </div>
           {/* Auto-hide as a ☰ button (was a text checkbox): pressed = the menu
@@ -981,13 +982,17 @@ function App() {
         </div>
 
         <nav className="sidebar-nav">
+          <span className="workspace-nav-label">Workspace</span>
           {navItems.map(item => (
             <button
               key={item.id}
               className={`nav-btn ${currentView === item.id ? 'nav-btn-active' : ''}`}
               onClick={item.onClick || (() => setCurrentView(item.id))}
             >
-              <item.icon size={18} /> {item.label}
+              <item.icon size={18} /> <span>{item.label}</span>
+              {['new', 'purchases', 'receipts'].includes(item.id) && (
+                <kbd className="workspace-key" aria-hidden="true">{SHORTCUTS.find(shortcut => shortcut.id === item.id).keys[0]}</kbd>
+              )}
             </button>
           ))}
           <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
@@ -1063,8 +1068,13 @@ function App() {
       </div>
 
       <div className="main-content">
-        <div className="app-topbar">
-          {/* v1.10.83 - the promise, on every screen (it was under the app name in the menu). */}
+        <div className="app-topbar workspace-topbar">
+          <div className="workspace-location"><span>AUTO-GST</span><span aria-hidden="true">/</span><strong>{pageLabel || 'Workspace'}</strong></div>
+          <button type="button" className="workspace-search" aria-keyshortcuts="Control+K Meta+K" onClick={() => {
+            setPaletteQuery(''); setPaletteIdx(0); setShowPalette(true);
+          }}>
+            <Search size={16} /> <span>Search invoices, clients and parts</span><kbd className="workspace-key" aria-hidden="true">Ctrl+K</kbd>
+          </button>
           <span className="topbar-free" title="Free forever: no paid version, no locked features, no ads, no tracking. Works on this computer, even offline.">Free forever</span>
           <button type="button" className="topbar-btn" onClick={() => setShowShortcutsHelp(true)} title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts"><Command size={18} /></button>
           {topActions}

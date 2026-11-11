@@ -8,7 +8,6 @@ import { withClientTds } from '../utils/tdsTcs';
 import { prepareEInvoices, parseIrpResponse, matchIrnEntries, downloadJson, einvoiceFileName } from '../utils/einvoice';
 import { EInvoiceReport } from './EInvoiceModal';
 import { openWhatsAppShare, invoiceShareMessage } from '../utils/share';
-import PageHeader from './PageHeader';
 import LockButton from './LockButton';
 import ActionsMenu from './ActionsMenu';
 import BulkCsvImport from './BulkCsvImport';
@@ -1444,13 +1443,14 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
   }, [guideDismissed, productCount, profile, allBills.length, onNew, onOpenProducts, onOpenSettings]);
 
   return (
-    <div className="dashboard-container">
-      <PageHeader
-        compact
-        icon="📊"
-        title={<>Dashboard <HelpButton title="Dashboard — how to use" doc="dashboard" size={16} /></>}
-        subtitle="Overview of your invoices"
-        meta={`${bills.length} invoice${bills.length === 1 ? '' : 's'}`}>
+    <div className="dashboard-container operations-dashboard">
+      <header className="operations-hero">
+        <div className="operations-intro">
+          <span className="operations-eyebrow">SALES &amp; INVENTORY</span>
+          <h1>Dashboard</h1>
+          <p>Review sales, outstanding payments and stock at a glance.</p>
+        </div>
+        <div className="operations-actions">
         <LockButton />
         <BulkCsvImport kind="sales" onDone={loadBills} />
         {einvoiceOn && (
@@ -1462,8 +1462,58 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
             </button>
           </>
         )}
-        <button className="btn btn-primary" onClick={onNew}><Plus size={18} /> New Invoice</button>
-      </PageHeader>
+          <button className="btn btn-primary operations-new" onClick={onNew} aria-keyshortcuts="F8"><Plus size={18} /> New Invoice <kbd className="workspace-key" aria-hidden="true">F8</kbd></button>
+          <HelpButton title="Dashboard — how to use" doc="dashboard" size={16} />
+        </div>
+      </header>
+
+      <div className="stats-grid stats-grid-4">
+        <div className="stat-card">
+          <div className="stat-icon stat-icon-blue"><IndianRupee size={22} /></div>
+          <div style={{ flex: 1 }}>
+            <p className="stat-label">Total Invoiced <HelpButton title="Total Invoiced" doc="dashboard#total-invoiced" size={14} /></p>
+            {Object.entries(stats.byCurrency).map(([cur, v]) => (
+              <div key={cur} className="stat-value" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
+                {formatCurrency(v.total, cur)}
+              </div>
+            ))}
+            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value">—</h2>}
+            {Object.keys(stats.byCurrency).length > 1 && (
+              <div className="text-muted" style={{ fontSize: '0.72rem', marginTop: 2 }} title="Each invoice at the exchange rate saved on it">
+                ≈ {formatCurrency(stats.inBase, baseCur)} in all{stats.noRate ? ` (${stats.noRate} without a rate left out)` : ''}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon stat-icon-green"><TrendingUp size={22} /></div>
+          <div style={{ flex: 1 }}>
+            <p className="stat-label">Tax Collected <HelpButton title="Tax Collected" doc="dashboard#tax-collected" size={14} /></p>
+            {Object.entries(stats.byCurrency).map(([cur, v]) => (
+              <div key={cur} className="stat-value stat-value-green" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
+                {formatCurrency(v.tax, cur)}
+              </div>
+            ))}
+            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value stat-value-green">—</h2>}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon stat-icon-amber"><Clock size={22} /></div>
+          <div style={{ flex: 1 }}>
+            <p className="stat-label">Outstanding <HelpButton title="Outstanding" doc="dashboard#outstanding" size={14} /></p>
+            {Object.entries(stats.byCurrency).map(([cur, v]) => (
+              <div key={cur} className="stat-value stat-value-amber" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
+                {formatCurrency(v.unpaid, cur)}
+              </div>
+            ))}
+            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value stat-value-amber">—</h2>}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon stat-icon-purple"><Receipt size={22} /></div>
+          <div><p className="stat-label">Invoices <HelpButton title="Invoices count" doc="dashboard#invoice-count" size={14} /></p><h2 className="stat-value stat-value-purple">{stats.count}</h2></div>
+        </div>
+      </div>
 
       {/* v1.10.69 - a new user used to land here on "No invoices yet." and
           nothing else. The welcome wizard does end with a list of what to do,
@@ -1590,54 +1640,6 @@ export default function Dashboard({ onNew, onEdit, onPrint, onDuplicate, onConve
           </div>
         </div>
       )}
-
-      <div className="stats-grid stats-grid-4">
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-blue"><IndianRupee size={22} /></div>
-          <div style={{ flex: 1 }}>
-            <p className="stat-label">Total Invoiced <HelpButton title="Total Invoiced" doc="dashboard#total-invoiced" size={14} /></p>
-            {Object.entries(stats.byCurrency).map(([cur, v]) => (
-              <div key={cur} className="stat-value" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
-                {formatCurrency(v.total, cur)}
-              </div>
-            ))}
-            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value">—</h2>}
-            {Object.keys(stats.byCurrency).length > 1 && (
-              <div className="text-muted" style={{ fontSize: '0.72rem', marginTop: 2 }} title="Each invoice at the exchange rate saved on it">
-                ≈ {formatCurrency(stats.inBase, baseCur)} in all{stats.noRate ? ` (${stats.noRate} without a rate left out)` : ''}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-green"><TrendingUp size={22} /></div>
-          <div style={{ flex: 1 }}>
-            <p className="stat-label">Tax Collected <HelpButton title="Tax Collected" doc="dashboard#tax-collected" size={14} /></p>
-            {Object.entries(stats.byCurrency).map(([cur, v]) => (
-              <div key={cur} className="stat-value stat-value-green" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
-                {formatCurrency(v.tax, cur)}
-              </div>
-            ))}
-            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value stat-value-green">—</h2>}
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-amber"><Clock size={22} /></div>
-          <div style={{ flex: 1 }}>
-            <p className="stat-label">Outstanding <HelpButton title="Outstanding" doc="dashboard#outstanding" size={14} /></p>
-            {Object.entries(stats.byCurrency).map(([cur, v]) => (
-              <div key={cur} className="stat-value stat-value-amber" style={{ fontSize: Object.keys(stats.byCurrency).length > 1 ? '1.1rem' : undefined }}>
-                {formatCurrency(v.unpaid, cur)}
-              </div>
-            ))}
-            {Object.keys(stats.byCurrency).length === 0 && <h2 className="stat-value stat-value-amber">—</h2>}
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon stat-icon-purple"><Receipt size={22} /></div>
-          <div><p className="stat-label">Invoices <HelpButton title="Invoices count" doc="dashboard#invoice-count" size={14} /></p><h2 className="stat-value stat-value-purple">{stats.count}</h2></div>
-        </div>
-      </div>
 
       {/* Low stock: one line, moving only when it does not fit (LowStockTicker, below). */}
       {lowStockProducts.length > 0 && (

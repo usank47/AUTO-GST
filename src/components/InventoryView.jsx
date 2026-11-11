@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { Package, Search, Plus, Edit3, Trash2, X, Save, Upload, Table2, Factory } from 'lucide-react';
 import { getAllProducts, saveProduct, deleteProduct, getProfile, getStockAlertSettings, getEnabledModules } from '../store';
 import { getAllUnits, getCountryConfig, formatCurrency, isModuleEnabled, isServiceProduct, trackedStock, filterUnitsByMode, getDefaultUnitForMode } from '../utils';
-import { productsCsvToList, PRODUCTS_SAMPLE } from '../utils/listCsv';
+import { productsCsvToList, PRODUCTS_SAMPLE, PRODUCT_EXPORT_HEADERS, productExportRow, serializeProductCsv } from '../utils/listCsv';
+import { PART_FIELDS, matchCatalogueProduct } from '../utils/catalogueParts';
 import CsvListImport from './CsvListImport';
 import { bomError, unitCost } from '../utils/manufacturing';
 import { BomEditor, MakeModal, ProductionList } from './Manufacturing';
@@ -18,15 +19,22 @@ import TableExport from './TableExport';
 // still written on save (mirrors sellingPrice) so any pre-v1.10.29 reader
 // still gets a valid number, but the form no longer edits it directly —
 // dead state removed for clarity.
+const PAGE_SIZE = 50;
+const partFields = Object.entries(PART_FIELDS);
+const partValues = product => Object.fromEntries(partFields.map(([key]) => [key, String(product[key] ?? '')]));
+
 const emptyForm = {
   // kind: v1.10.83 (#121) - 'goods' or 'service' (a service has no stock).
   kind: 'goods', name: '', hsn: '', purchasePrice: '', sellingPrice: '', taxPercent: '', gstTreatment: '', unit: 'Pcs', stock: '', description: '',
-  madeHere: false, bom: [],
+  ...partValues({}), madeHere: false, bom: [],
 };
 
 export default function InventoryView() {
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
+  const [stockFilter, setStockFilter] = useState('all');
+  const [partFilters, setPartFilters] = useState({ brand: '', category: '', compatibility: '' });
+  const [page, setPage] = useState(1);
   // v1.10.77 (#85) - edit many products at once (see ProductBulkEdit).
   const [bulkEdit, setBulkEdit] = useState(false);
   // v1.10.84 (#177) - tick products, then delete them in one go.
@@ -66,13 +74,35 @@ export default function InventoryView() {
     getStockAlertSettings().then(setStockAlerts).catch(() => {});
   }, []);
 
-  const filtered = search.trim()
-    ? products.filter(p =>
-        (p.name || '').toLowerCase().includes(search.toLowerCase()) ||
-        (p.hsn || '').toLowerCase().includes(search.toLowerCase())
-      )
-    : products;
-  const pickedShown = filtered.filter((p) => picked.has(p.id));
+  const filterOptions = field => [...new Set(products.map(product => product[field]).filter(Boolean))].sort();
+  const stockStatus = product => {
+    const stock = trackedStock(product);
+    if (stock === null) return 'untracked';
+    if (stock <= 0) return 'out';
+    return stockAlerts.enabled !== false && stock <= Number(stockAlerts.threshold ?? 5) ? 'low' : 'in';
+  };
+  const stockCounts = { low: 0, out: 0 };
+  const filtered = products.filter(product => {
+    const status = stockStatus(product);
+    if (status === 'low' || status === 'out') stockCounts[status] += 1;
+    return (stockFilter === 'all' || stockFilter === status)
+      && matchCatalogueProduct(product, search)
+      && (!partFilters.brand || product.brand === partFilters.brand)
+      && (!partFilters.category || product.category === partFilters.category)
+      && (!partFilters.compatibility || String(product.compatibility || '').toLowerCase().includes(partFilters.compatibility.trim().toLowerCase()));
+  });
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const activePage = Math.min(page, pageCount);
+  const start = (activePage - 1) * PAGE_SIZE;
+  const pageProducts = filtered.slice(start, start + PAGE_SIZE);
+  const pickedShown = filtered.filter(p => picked.has(p.id));
+  const selectPage = selected => setPicked(previous => {
+    const next = new Set(previous);
+    for (const product of pageProducts) {
+      if (selected) next.add(product.id); else next.delete(product.id);
+    }
+    return next;
+  });
 
   const openAdd = () => {
     setForm({ ...emptyForm });
@@ -85,6 +115,7 @@ export default function InventoryView() {
     // Read `sellingPrice` if set, else fall back to `rate`. `purchasePrice`
     // is new — starts empty for legacy products until the user fills it.
     setForm({
+      ...partValues(product),
       kind: isServiceProduct(product) ? 'service' : 'goods',
       name: product.name || '',
       hsn: product.hsn || '',
@@ -131,10 +162,11 @@ export default function InventoryView() {
       const sellingPrice = form.sellingPrice ? parseFloat(form.sellingPrice) : 0;
       const purchasePrice = form.purchasePrice ? parseFloat(form.purchasePrice) : 0;
       const service = form.kind === 'service';
+      const original = products.find(p => p.id === editingId);
       const product = {
         // Fields this form does not show (cess % from purchase bills, etc.)
         // are kept: the record used to be rebuilt from the form alone.
-        ...(editingId ? (products.find(p => p.id === editingId) || {}) : {}),
+        ...original,
         ...(editingId ? { id: editingId } : {}),
         name: form.name.trim(),
         hsn: form.hsn.trim(),
@@ -149,6 +181,7 @@ export default function InventoryView() {
         // to save 0, which showed Out of Stock for things never counted).
         stock: service || form.stock === '' ? undefined : parseFloat(form.stock),
         description: form.description.trim(),
+        ...(!service ? Object.fromEntries(partFields.filter(([key]) => form[key].trim() || original?.[key]).map(([key]) => [key, form[key].trim()])) : {}),
         // Only written while the feature is on; otherwise the fields a product
         // already has are kept as they are (spread above).
         ...(mfgOn ? (form.madeHere && !service ? { madeHere: true, bom } : { madeHere: false }) : {}),
@@ -157,8 +190,8 @@ export default function InventoryView() {
       toast(editingId ? 'Product updated' : 'Product added', 'success');
       closeForm();
       loadProducts();
-    } catch {
-      toast('Failed to save product', 'error');
+    } catch (error) {
+      toast(error.status === 400 || error.status === 409 ? error.message : 'Failed to save product', 'error');
     }
   };
 
@@ -216,12 +249,12 @@ export default function InventoryView() {
   const [showImport, setShowImport] = useState(false);
 
   return (
-    <div className="dashboard-container">
+    <div className="dashboard-container catalogue-workspace">
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div>
-            <h1 className="page-title">Products <HelpButton title="Products — how to use" doc="products" size={16} /></h1>
-            <p className="page-subtitle">Manage your products and services catalog</p>
+            <h1 className="page-title">Parts Catalogue <HelpButton title="Products — how to use" doc="products" size={16} /></h1>
+            <p className="page-subtitle">Manage parts, selling prices and stock availability</p>
           </div>
         </div>
         {/* Wraps on a phone: with Make there are four buttons (v1.10.83, #115). */}
@@ -245,22 +278,45 @@ export default function InventoryView() {
         </div>
       </div>
       {showImport && (
-        <CsvListImport what="products" sample={PRODUCTS_SAMPLE} sampleName="Products-sample.csv" doc="products#import"
-          intro="One product or service per row: Name (required), Type (Goods or Service), HSN/SAC, Unit, Purchase Price, Selling Price, GST % and Stock (leave Stock blank for a service). For a product already saved, details that are empty on it are filled in from the file; nothing already filled is changed."
+        <CsvListImport requireValid what="products" sample={PRODUCTS_SAMPLE} sampleName="Products-sample.csv" doc="products#import"
+          intro="One product or service per row. Name is required. Keep alternate numbers and compatibility together in their respective text cells. Leave stock blank for services. Import fills empty fields and keeps saved values. If a CSV export includes Part text encoding, keep that column for re-import. Use Excel export to keep leading zeros when editing a workbook."
           parse={(rows) => { const r = productsCsvToList(rows, products); return { list: r.products, updates: r.updates, skipped: r.skipped, errors: r.errors }; }}
           save={saveProduct} onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); loadProducts(); }} />
       )}
       {showMake && <MakeModal products={products} currency={profileCurrency} onClose={() => setShowMake(false)} onSaved={afterProduction} />}
 
       {/* Search */}
-      <div className="glass-panel p-4 mb-6">
-        <div className="search-box" style={{ maxWidth: '400px' }}>
+      <div className="catalogue-metrics" aria-label="Inventory overview">
+        <div className="glass-panel catalogue-metric"><span>Catalogue entries</span><strong>{products.length}</strong></div>
+        <div className="glass-panel catalogue-metric catalogue-metric-low"><span>Low stock</span><strong>{stockCounts.low}</strong></div>
+        <div className="glass-panel catalogue-metric catalogue-metric-out"><span>Out of stock</span><strong>{stockCounts.out}</strong></div>
+      </div>
+      <div className="glass-panel catalogue-filters">
+        <div className="search-box">
           <Search size={16} className="search-icon" />
-          <input data-shortcut-search aria-keyshortcuts="F3" type="text" placeholder="Search by name or HSN..." value={search}
-            onChange={e => setSearch(e.target.value)} className="search-input" disabled={bulkEdit}
+          <input data-shortcut-search aria-keyshortcuts="F3" type="text" placeholder="Search name, HSN, part number, brand…" value={search}
+            onChange={e => { setSearch(e.target.value); setPage(1); }} className="search-input" disabled={bulkEdit}
             title={bulkEdit ? 'Save or cancel the bulk edit first' : undefined} />
           {search && <button className="icon-btn" onClick={() => setSearch('')} title="Clear search" aria-label="Clear search"><X size={14} /></button>}
         </div>
+        <kbd className="workspace-key">F3</kbd>
+        <select className="form-input" value={stockFilter} onChange={e => { setStockFilter(e.target.value); setPage(1); }} aria-label="Stock status" disabled={bulkEdit}>
+          <option value="all">All stock statuses</option>
+          <option value="in">In stock</option>
+          <option value="low">Low stock</option>
+          <option value="out">Out of stock</option>
+          <option value="untracked">Stock not tracked</option>
+        </select>
+        {['brand', 'category'].map(field => (
+          <select key={field} className="form-input" value={partFilters[field]} aria-label={PART_FIELDS[field][0]}
+            disabled={bulkEdit} onChange={e => { setPartFilters({ ...partFilters, [field]: e.target.value }); setPage(1); }}>
+            <option value="">All {field === 'brand' ? 'brands' : 'categories'}</option>
+            {filterOptions(field).map(value => <option key={value} value={value}>{value}</option>)}
+          </select>
+        ))}
+        <input type="search" className="form-input catalogue-fitment-filter" value={partFilters.compatibility}
+          aria-label="Vehicle compatibility" placeholder="Vehicle make, model or engine" disabled={bulkEdit}
+          onChange={e => { setPartFilters({ ...partFilters, compatibility: e.target.value }); setPage(1); }} />
       </div>
 
       {/* Add/Edit Modal */}
@@ -345,6 +401,13 @@ export default function InventoryView() {
                 <input type="text" className="form-input" value={form.description}
                   onChange={e => updateField('description', e.target.value)} placeholder="Brief description..." />
               </div>
+              {form.kind !== 'service' && partFields.map(([key, [label]]) => (
+                <div className="form-group" key={key}>
+                  <label className="form-label" htmlFor={`part-${key}`}>{label}</label>
+                  <input id={`part-${key}`} className="form-input" value={form[key]}
+                    onChange={e => updateField(key, e.target.value)} />
+                </div>
+              ))}
               {mfgOn && form.kind !== 'service' && (
                 <BomEditor productId={editingId} madeHere={form.madeHere} bom={form.bom} products={products} currency={profileCurrency}
                   onChange={({ madeHere, bom }) => setForm((prev) => ({ ...prev, madeHere, bom }))} />
@@ -366,8 +429,7 @@ export default function InventoryView() {
           <h3>Products & Services <HelpButton title="The product list" doc="products#product-list" size={16} /></h3>
           {!bulkEdit && (
             <TableExport title="Products" filename="Products"
-              headers={['Name', 'Type', 'HSN/SAC', 'Purchase price', 'Selling price', 'GST %', 'Unit', 'Stock']}
-              rows={filtered.map((p) => [p.name, isServiceProduct(p) ? 'Service' : 'Goods', p.hsn || '', Number(p.purchasePrice) || 0, Number(p.sellingPrice ?? p.rate) || 0, Number(p.taxPercent) || 0, p.unit || 'Nos', trackedStock(p) ?? ''])} />
+              headers={PRODUCT_EXPORT_HEADERS} rows={filtered.map(productExportRow)} serializeCsv={serializeProductCsv} />
           )}
         </div>
         {bulkEdit && filtered.length > 0 ? (
@@ -384,7 +446,7 @@ export default function InventoryView() {
           <div className="table-scroll">
             {pickedShown.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', padding: '0.5rem 0.75rem', margin: '0 0 0.5rem', background: 'var(--primary-light)', borderRadius: 8 }}>
-                <strong style={{ fontSize: '0.88rem' }}>{pickedShown.length} selected</strong>
+                <strong style={{ fontSize: '0.88rem' }}>{pickedShown.length} selected across matching pages</strong>
                 <button type="button" className="btn btn-secondary" style={{ color: '#dc2626', borderColor: '#dc2626' }} onClick={() => deletePicked(pickedShown)}>
                   <Trash2 size={14} /> Delete selected
                 </button>
@@ -395,13 +457,16 @@ export default function InventoryView() {
               <thead>
                 <tr>
                   <th style={{ width: 36 }}>
-                    <input type="checkbox" aria-label="Select all products shown"
-                      checked={pickedShown.length === filtered.length}
-                      onChange={(e) => setPicked(e.target.checked ? new Set(filtered.map((p) => p.id)) : new Set())} />
+                    <input type="checkbox" aria-label="Select products on this page"
+                      checked={pageProducts.every(p => picked.has(p.id))}
+                      onChange={e => selectPage(e.target.checked)} />
                   </th>
                   <th>Name</th>
+                  <th>Part numbers</th>
+                  <th>Vehicle compatibility</th>
+                  <th className="catalogue-amount">Purchase price</th>
                   <th>HSN/SAC</th>
-                  <th>Rate</th>
+                  <th className="catalogue-amount">Selling price</th>
                   <th>GST %</th>
                   <th>Unit</th>
                   <th>Stock</th>
@@ -409,7 +474,7 @@ export default function InventoryView() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(product => (
+                {pageProducts.map(product => (
                   <tr key={product.id}>
                     <td>
                       <input type="checkbox" aria-label={`Select ${product.name}`} checked={picked.has(product.id)}
@@ -417,14 +482,18 @@ export default function InventoryView() {
                     </td>
                     <td className="font-medium" title={product.description || ''}>
                       {product.name}
+                      {(product.brand || product.category) && <div className="catalogue-secondary">{[product.brand, product.category].filter(Boolean).join(' · ')}</div>}
                       {mfgOn && product.madeHere && (
                         <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400 }}>
                           Made here · cost {formatCurrency(unitCost(product, products), profileCurrency)} per {product.unit || 'unit'}
                         </div>
                       )}
                     </td>
+                    <td>{product.partNo || '—'}{product.altPartNo && <div className="catalogue-secondary">Alt: {product.altPartNo}</div>}</td>
+                    <td>{product.compatibility || '—'}</td>
+                    <td className="catalogue-amount">{product.purchasePrice != null ? formatCurrency(product.purchasePrice, profileCurrency) : '—'}</td>
                     <td className="text-muted">{product.hsn || '-'}</td>
-                    <td className="font-bold">{product.rate ? formatCurrency(product.rate, profileCurrency) : '-'}</td>
+                    <td className="font-bold catalogue-amount">{(product.sellingPrice ?? product.rate) != null ? formatCurrency(product.sellingPrice ?? product.rate, profileCurrency) : '—'}</td>
                     <td>{product.taxPercent ? `${product.taxPercent}%` : '-'}</td>
                     <td className="text-muted">{product.unit || 'Nos'}</td>
                     <td>
@@ -435,7 +504,7 @@ export default function InventoryView() {
                         <span className="text-muted" title="No stock entered, so it is not counted">-</span>
                       ) : trackedStock(product) <= 0 ? (
                         <span style={{ color: '#dc2626', fontWeight: 600 }}>Out of Stock</span>
-                      ) : (stockAlerts.enabled !== false && trackedStock(product) <= Number(stockAlerts.threshold ?? 5)) ? (
+                      ) : stockStatus(product) === 'low' ? (
                         <span style={{ color: '#d97706', fontWeight: 600 }}>{product.stock}</span>
                       ) : (
                         product.stock
@@ -458,6 +527,14 @@ export default function InventoryView() {
           </div>
         )}
       </div>
+      {!bulkEdit && pageCount > 1 && (
+        <nav className="catalogue-pagination" aria-label="Catalogue pages">
+          <span>Showing {start + 1}–{start + pageProducts.length} of {filtered.length}</span>
+          <button type="button" className="btn btn-secondary" disabled={activePage === 1} onClick={() => setPage(activePage - 1)}>Previous</button>
+          <span>Page {activePage} of {pageCount}</span>
+          <button type="button" className="btn btn-secondary" disabled={activePage === pageCount} onClick={() => setPage(activePage + 1)}>Next</button>
+        </nav>
+      )}
       {mfgOn && <ProductionList products={products} currency={profileCurrency} reloadKey={mfgReload} onChanged={afterProduction} />}
     </div>
   );

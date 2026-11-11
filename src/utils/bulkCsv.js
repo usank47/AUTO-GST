@@ -19,7 +19,7 @@ import {
 
 // RFC 4180 CSV: quoted fields, "" inside quotes, commas and line breaks
 // inside quotes, CRLF or LF, and Excel's byte-order mark.
-export function parseCsv(text) {
+export function parseCsv(text, { keepEmptyRows = false } = {}) {
   const s = String(text || '').replace(/^\uFEFF/, '');
   const rows = [];
   let row = [];
@@ -39,7 +39,7 @@ export function parseCsv(text) {
     } else cell += ch;
   }
   if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
-  return rows.filter((r) => r.some((c) => String(c).trim() !== ''));
+  return keepEmptyRows ? rows : rows.filter((r) => r.some((c) => String(c).trim() !== ''));
 }
 
 const norm = (h) => String(h || '').toLowerCase().replace(/[\s_\-.%()/#*]+/g, '');
@@ -51,8 +51,9 @@ const norm = (h) => String(h || '').toLowerCase().replace(/[\s_\-.%()/#*]+/g, ''
 // Vyapar puts the business and report name above it. A closing "Total" row is
 // not data. When two columns fit (Vyapar has "Tax Percent" and "Tax"), the
 // spelling listed first wins.
-export function rowsToRecords(input, fields) {
-  const table = (Array.isArray(input) ? input : parseCsv(input))
+export function rowsToRecords(input, fields, { originalRowNumbers = false } = {}) {
+  const source = Array.isArray(input) ? input : parseCsv(input, { keepEmptyRows: originalRowNumbers });
+  const table = source
     .map((r) => (Array.isArray(r) ? r : []))
     .filter((r) => r.some((c) => String(c ?? '').trim() !== ''));
   if (table.length < 2) return { records: [], missing: [], unknown: [] };
@@ -76,7 +77,7 @@ export function rowsToRecords(input, fields) {
   const records = table.slice(at + 1)
     .filter((r) => norm(r.find((c) => String(c ?? '').trim() !== '')) !== 'total')
     .map((r) => {
-      const rec = { _line: table.indexOf(r) + 1 };
+      const rec = { _line: (originalRowNumbers ? source : table).indexOf(r) + 1 };
       for (const [field, idx] of Object.entries(colOf)) rec[field] = String(r[idx] ?? '').trim();
       return rec;
     });

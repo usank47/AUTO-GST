@@ -875,6 +875,8 @@ export default function PrintSettings() {
 
           {/* T&C SEPARATE PAGE */}
           <SettingGroup title="Terms &amp; Conditions" doc="print-settings#terms-page">
+            <SelectRow label="Terms PDF layout" value={settings.termsFormatMode} onChange={v => set({ termsFormatMode: v })}
+              options={[["compact", "Compact"], ["formatted", "Formatted"]]} />
             <ToggleRow label="Print T&amp;C on a separate page" value={settings.termsSeparatePage} onChange={v => set({ termsSeparatePage: v })}
               hint="For long terms — puts them on page 2 instead of squishing on page 1. Only affects invoices with T&amp;C enabled." />
           </SettingGroup>

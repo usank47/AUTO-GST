@@ -357,6 +357,15 @@ export const getTermsTemplates = async () => {
   return apiFetch(`${API}/templates`);
 };
 
+export const getDefaultTermsTemplateId = async () => {
+  const { value } = await apiFetch(`${API}/meta/defaultTermsTemplateId`);
+  return value || '';
+};
+
+export const saveDefaultTermsTemplateId = (id) => apiFetch(`${API}/meta/defaultTermsTemplateId`, {
+  method: 'POST', body: JSON.stringify({ value: id }),
+});
+
 export const saveTermsTemplate = async (template) => {
   const res = await apiFetch(`${API}/templates`, { method: 'POST', body: JSON.stringify(template) });
   if (res.id) template.id = res.id;

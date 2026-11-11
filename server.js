@@ -16,6 +16,7 @@ import { fileURLToPath } from 'url';
 import { redact } from './src/utils/errorReport.js';
 import { validateCashEntry, cleanCashEntry } from './src/utils/cashBook.js';
 import { validatePurchasePayments } from './src/utils/purchasePayments.js';
+import { cataloguePartKey, partFieldError } from './src/utils/catalogueParts.js';
 import { templateTotals, clientYearToDate, nextCounterValue, startFor, numberSeriesFor, counterKeyFor, formatDocNumber, businessKeyOf, getFinancialYearLabel, INVOICE_TYPES } from './src/utils.js';
 import { resolveAppHome } from './src/utils/appHome.js';
 import { makeDir, makeDirAsync } from './src/utils/makeDir.js';
@@ -520,11 +521,19 @@ app.get('/api/products', (req, res) => {
 
 app.post('/api/products', (req, res) => {
   const product = req.body;
+  if (!product || typeof product !== 'object' || Array.isArray(product)) return res.status(400).json({ error: 'Expected a product record.' });
+  const fieldError = partFieldError(product);
+  if (fieldError) return res.status(400).json({ error: fieldError });
   if (!product.id) product.id = 'prod_' + Date.now() + crypto.randomBytes(3).toString('hex');
+  const filePath = path.join(DATA_DIR, 'products', safeFileName(product.id) + '.json');
+  const partKey = cataloguePartKey(product);
+  if (partKey && partKey !== cataloguePartKey(readJSON(filePath, null))) {
+    const conflict = readAllFromDir('products').find(saved => saved.id !== product.id && cataloguePartKey(saved) === partKey);
+    if (conflict) return res.status(409).json({ error: `Part number already belongs to ${conflict.name} for this brand.` });
+  }
   // v1.10.83 (#121) - a service has no stock, whoever saves it (a purchase
   // bill adds quantities to every product on it).
   if (product.kind === 'service') delete product.stock;
-  const filePath = path.join(DATA_DIR, 'products', safeFileName(product.id) + '.json');
   writeJSON(filePath, product);
   res.json({ success: true, id: product.id });
 });

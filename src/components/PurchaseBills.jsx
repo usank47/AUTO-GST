@@ -609,6 +609,7 @@ export default function PurchaseBills() {
       const before = editingId ? purchases.find(p => p.id === editingId) : null;
       const purchaseFields = {
         ...(editingId ? { id: editingId } : {}),
+        ...(before?.inventoryExcluded ? { inventoryExcluded: true } : {}),
         date: form.date,
         supplierName: form.supplierName.trim(),
         supplierAddress: (form.supplierAddress || '').trim(),
@@ -660,6 +661,12 @@ export default function PurchaseBills() {
         purchase = markPurchasePaid(purchaseFields, localToday());
       }
       await savePurchase(purchase);
+      if (purchase.inventoryExcluded) {
+        toast('Purchase updated', 'success');
+        closeForm();
+        loadPurchases();
+        return;
+      }
 
       // v1.10.29 — reported: "items added in purchase bill also available
       // for sale means automatically added to the product page too".
@@ -815,6 +822,7 @@ export default function PurchaseBills() {
   // Take a deleted bill's quantities back out of product stock.
   // Matches products the same way saving does: productId, then name.
   const revertPurchaseStock = async (bill) => {
+    if (bill?.inventoryExcluded) return;
     const lines = (bill?.items || []).filter(it => it.name && Number(it.quantity) > 0);
     if (!lines.length) return;
     const products = await getAllProducts();
@@ -839,7 +847,7 @@ export default function PurchaseBills() {
       : '';
     if (await confirmAction({
       title: 'Delete this purchase bill?',
-      message: `Stock levels for the products in this bill will be reverted. Any GST ITC already claimed against this bill in past returns stays as filed.${paidNote}`,
+      message: `${target?.inventoryExcluded ? 'This imported bill did not add stock.' : 'Stock levels for the products in this bill will be reverted.'} Any GST ITC already claimed against this bill in past returns stays as filed.${paidNote}`,
       confirmLabel: 'Delete',
       tone: 'danger',
     })) {

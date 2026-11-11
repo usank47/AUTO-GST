@@ -12,8 +12,7 @@
 
 import { toCsvCell, toCsvLine } from '../src/utils.js';
 import { dateOrderNote, parseCsv, toIsoDate, toNum, salesCsvToBills, billsToSalesCsv, purchaseCsvToRecords, purchasesToCsv, SALES_TEMPLATE, PURCHASE_TEMPLATE, receivedByInvoice, newProductsFromBills } from '../src/utils/bulkCsv.js';
-import { productsCsvToList, clientsCsvToList } from '../src/utils/listCsv.js';
-import { readFileSync } from 'fs';
+import { productsCsvToList, clientsCsvToList, serializeProductCsv, productExportRow } from '../src/utils/listCsv.js';
 
 let passed = 0, failed = 0;
 function eq(actual, expected, label) {
@@ -146,14 +145,10 @@ console.log('\n[#134] The Products export imports back, every column');
   const p = productsCsvToList(v82, []).products[0];
   eq(JSON.stringify([p.hsn, p.purchasePrice, p.sellingPrice, p.taxPercent, p.unit, p.stock]), JSON.stringify(['39172390', 822, 822, 18, 'Ft', 0]),
     'HSN/SAC, both prices and GST % are read, not only the name');
-  // Today's export headings, read from the Products screen itself, so a change
-  // to them that the import does not follow fails here.
-  const src = readFileSync(new URL('../src/components/InventoryView.jsx', import.meta.url), 'utf8');
-  const headers = JSON.parse((/headers=\{(\[[^\]]*\])\}/.exec(src) || [])[1].replace(/'/g, '"'));
-  const row = { Name: 'Pen', Type: 'Goods', 'HSN/SAC': '9608', 'Purchase price': 6, 'Selling price': 10, 'GST %': 12, Unit: 'Nos', Stock: 40 };
-  const now = productsCsvToList([toCsvLine(headers), toCsvLine(headers.map((h) => row[h] ?? ''))].join('\n'), []).products[0];
+  const row = { name: 'Pen', kind: 'goods', hsn: '9608', purchasePrice: 6, sellingPrice: 10, taxPercent: 12, unit: 'Nos', stock: 40 };
+  const now = productsCsvToList(serializeProductCsv([productExportRow(row)])).products[0];
   eq(JSON.stringify([now?.hsn, now?.purchasePrice, now?.sellingPrice, now?.taxPercent, now?.unit, now?.stock]), JSON.stringify(['9608', 6, 10, 12, 'Nos', 40]),
-    `the screen's own export headings (${headers.join(', ')}) all import`);
+    'the catalogue export columns import into the expected product fields');
 }
 
 console.log('\n[#134] Importing products again fills in what is empty, never overwrites');
