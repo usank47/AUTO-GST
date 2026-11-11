@@ -3,8 +3,13 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { Maximize2, ArrowLeft, Plus, Trash2, Download, UserPlus, Pencil, Settings, ChevronUp, ChevronDown, MessageCircle, Check, Loader, Truck, Printer, Eye, EyeOff, QrCode } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
+<<<<<<< HEAD
 import { saveBill, deleteBill, applyStockChanges, getNextInvoiceNumber, typedNumberInSeries, raiseInvoiceCounter, getTermsTemplates, getDefaultTermsTemplateId, getAllClients, saveClient, getProfile, getAllProducts, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getAllProfiles, getRegionMode, saveRecurring, getAllRecurring, getAllBills, getEnabledModules, getBusinessType } from '../store';
 import { clientPaperPrefs, clientPaperOptions, INVOICE_TYPES, isModuleEnabled, businessKeyOf, GST_DOC_NUMBER, COUNTRIES, deliveryChargeLine, stockEffect, appliedStock, stockDelta, generateEWayBillJSON, formatCurrency, getCountryConfig, getStatesForCountry, getAllUnits, addCustomUnit, removeCustomUnit, getCountriesForRegion, TDS_SECTIONS, TCS_SECTIONS, REMOVED_TCS_SECTIONS, getActiveAccounts, getDefaultAccount, getAccountById, getDefaultUnitForMode, filterUnitsByMode, PAPER_SIZES, getPaperSize, computeInvoiceTotals, clientYearToDate, ORDER_DETAIL_FIELDS, customFieldsOf, invoiceOptionOn, DEFAULT_DECLARATION, decodeGstin, safePageBoundaries, localToday, toLocalIsoDate, parseLocalDate, paymentStatusFor, getStateCode } from '../utils';
+=======
+import { saveBill, deleteBill, applyStockChanges, getNextInvoiceNumber, typedNumberInSeries, raiseInvoiceCounter, getTermsTemplates, getAllClients, saveClient, getProfile, getAllProducts, getInvoiceDisplayOptions, saveInvoiceDisplayOptions, getAllProfiles, getRegionMode, saveRecurring, getAllRecurring, getAllBills, getEnabledModules } from '../store';
+import { clientPaperPrefs, clientPaperOptions, INVOICE_TYPES, isModuleEnabled, businessKeyOf, GST_DOC_NUMBER, COUNTRIES, deliveryChargeLine, stockEffect, appliedStock, stockDelta, generateEWayBillJSON, formatCurrency, numberToWords, getCountryConfig, getStatesForCountry, getAllUnits, addCustomUnit, removeCustomUnit, getCountriesForRegion, TDS_SECTIONS, TCS_SECTIONS, REMOVED_TCS_SECTIONS, TERMS_PRESETS, getActiveAccounts, getDefaultAccount, getAccountById, getDefaultUnitForMode, filterUnitsByMode, PAPER_SIZES, getPaperSize, computeInvoiceTotals, clientYearToDate, htmlHasText, ORDER_DETAIL_FIELDS, customFieldsOf, invoiceOptionOn, DEFAULT_DECLARATION, decodeGstin, safePageBoundaries, localToday, toLocalIsoDate, parseLocalDate, paymentStatusFor } from '../utils';
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
 import { getPrintSettings, savePrintSettings } from '../utils/printSettings';
 import { openWhatsAppShare, invoiceShareMessage } from '../utils/share';
 import { confirmAction, promptAction } from './ConfirmModal';
@@ -372,25 +377,17 @@ function SizeFields({ item, onSizeChange, clampNonNeg }) {
 }
 
 const LineItem = memo(function LineItem({
-  item, invoiceOptions, showGST, taxLabel,
+  item, rowIndex = 0, invoiceOptions, showGST, taxLabel,
+  taxInclusive, isInterState,
   units, countryTaxRates, filterUnitsByMode, invoiceMode,
   currency, profileCountry, suggestions,
   onFieldChange, onSelectProduct, onSetProductSearch,
   onAddCustomUnit, onRemoveCustomUnit, onRemove, clampNonNeg,
   isLastRow, onAddRow, isOnlyRow, onSizeChange,
 }) {
-  // v1.10.37 — Keyboard shortcut: Enter on any input inside the LAST
-  // row adds a new row. Muscle-memory for POS users — reported: "if
-  // user hits Enter on last item field the natural expectation is a
-  // new blank row". Excludes Shift+Enter (soft newline in text
-  // fields) and only fires on isLastRow to avoid Enter-mashing on
-  // middle rows creating trailing empty rows.
-  // v1.10.84 (#167) - Enter moves along the row like a billing program: Item
-  // -> HSN -> Qty -> Unit -> Rate. Enter in Rate (or a box after it) finishes
-  // the row: the next row's Item box, or a new row on the last one (#151).
   const handleRowKeyDown = (e) => {
     if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
-    if (e.target.closest('.line-item-description-row')) return; // a description can have new lines
+    if (e.target.closest('.line-item-description-row')) return;
     const fields = rowFields(e.currentTarget);
     const at = fields.indexOf(e.target);
     if (at < 0) return;
@@ -398,22 +395,41 @@ const LineItem = memo(function LineItem({
     e.preventDefault();
     if (rateAt < 0 || at < rateAt) { focusField(fields[at + 1]); return; }
     if (!isLastRow) { focusField(e.currentTarget.nextElementSibling?.querySelector('.line-item-name')); return; }
-    // Only a row with something in it adds a new one, so an accidental Enter
-    // on a blank row doesn't spawn another blank row.
     const hasContent = (item.name && item.name.trim()) || Number(item.rate) > 0 || Number(item.quantity) > 0;
     if (hasContent) onAddRow?.();
   };
+
+  // Compute live line-item Taxable, Tax (CGST+SGST or IGST), and Net Total for the Stitch table columns
+  const qty = item.unit === 'NA' ? 1 : (parseFloat(item.quantity) || 0);
+  const rate = parseFloat(item.rate) || 0;
+  const taxRate = showGST ? (parseFloat(item.taxPercent) || 0) : 0;
+  const cessRate = showGST && invoiceOptions.showCess ? (parseFloat(item.cessPercent) || 0) : 0;
+  const totalRate = taxRate + cessRate;
+  const rawGross = qty * rate;
+  const discVal = invoiceOptions.showDiscount ? (parseFloat(item.discount) || 0) : 0;
+  const discType = item.discountType === 'percent' ? 'percent' : 'fixed';
+  let discAmt = 0;
+  if (discVal > 0) {
+    discAmt = discType === 'percent' ? rawGross * (Math.min(100, discVal) / 100) : Math.min(rawGross, discVal);
+  }
+  const afterDisc = Math.max(0, rawGross - discAmt);
+  const lineTaxable = taxInclusive && totalRate > 0 ? afterDisc / (1 + totalRate / 100) : afterDisc;
+  const lineTax = lineTaxable * (taxRate / 100);
+  const lineCess = lineTaxable * (cessRate / 100);
+  const lineNet = lineTaxable + lineTax + lineCess;
+  const sym = currencySymbolFor(currency);
+
   return (
-    <div className="line-item-row" data-item-id={item.id} onKeyDown={handleRowKeyDown}>
-      <div className="line-item-field" style={{ flex: 2.5, minWidth: 220, position: 'relative' }}>
-        {/* v1.10.74 - was "Description", which clashed with "+ Add description" below. */}
-        <label className="form-label">Item</label>
-        {/* v1.10.37 — Keyboard nav on product suggestions. Reported:
-            "20 invoices/day is slow because product picker forces the
-            mouse." Now: ArrowDown / ArrowUp cycles suggestions, Enter
-            commits the highlighted one (or the first if none is
-            highlighted). Escape closes the dropdown. Highlighted index
-            resets when the query changes. */}
+    <div className="line-item-row erp-line-item-row" data-item-id={item.id} onKeyDown={handleRowKeyDown}
+      style={{ alignItems: 'center', padding: '0.65rem 0.65rem', borderBottom: '1px solid var(--border-color, #e2e8f0)', background: 'var(--card-bg, #fff)', gap: '0.45rem' }}>
+      {/* # Row Index */}
+      <div style={{ width: 22, textAlign: 'center', fontWeight: 700, fontSize: '0.78rem', color: '#64748b', flexShrink: 0 }}>
+        {rowIndex + 1}
+      </div>
+
+      {/* ITEM & DESCRIPTION */}
+      <div className="line-item-field" style={{ flex: 2.5, minWidth: 205, position: 'relative' }}>
+        <label className="form-label" style={{ display: 'none' }}>Item</label>
         <SuggestingInput
           item={item}
           suggestions={suggestions}
@@ -422,141 +438,168 @@ const LineItem = memo(function LineItem({
           onSetProductSearch={onSetProductSearch}
           currency={currency}
         />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+          <span style={{
+            fontSize: '0.64rem', fontWeight: 700, padding: '0.1rem 0.42rem', borderRadius: 4,
+            background: item.unit === 'Job' || item.unit === 'Hrs' ? '#f1f5f9' : '#dcfce7',
+            color: item.unit === 'Job' || item.unit === 'Hrs' ? '#334155' : '#15803d',
+          }}>
+            {item.brand || (item.unit === 'Job' || item.unit === 'Hrs' ? 'Service / Labour' : 'RICO Genuine')}
+          </span>
+          <span style={{ fontSize: '0.68rem', color: '#64748b' }}>
+            {item.rackLocation ? `Location: ${item.rackLocation}` : (item.unit === 'Job' ? 'Technician: R. Verma' : 'Location: Rack E-04')}
+          </span>
+          {!(item.description || item._descOpen) && (
+            <button type="button"
+              onClick={() => onFieldChange(item.id, '_descOpen', true)}
+              style={{ fontSize: '0.66rem', padding: '0 0.3rem', background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontWeight: 600 }}
+              title="Add a description that will show under this line in the PDF">
+              + Note
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* OEM / PART NO */}
+      <div className="line-item-field" style={{ flex: 0.85, minWidth: 76 }}>
+        <label className="form-label" style={{ display: 'none' }}>OEM / Part No</label>
+        <input type="text" className="form-input" value={item.partNo ?? (item.hsn ? item.hsn : '')}
+          placeholder="—"
+          onChange={(e) => onFieldChange(item.id, 'partNo', e.target.value)}
+          style={{ fontSize: '0.78rem', fontFamily: 'ui-monospace, monospace', padding: '0.35rem 0.45rem' }} />
+      </div>
+
+      {/* HSN / SAC */}
       {invoiceOptions.showHSN && (
-        <div className="line-item-field" style={{ flex: 1, position: 'relative' }}>
-          <label className="form-label">{invoiceMode === 'services' ? 'SAC' : 'HSN/SAC'}</label>
+        <div className="line-item-field" style={{ flex: 0.9, minWidth: 80, position: 'relative' }}>
+          <label className="form-label" style={{ display: 'none' }}>{invoiceMode === 'services' ? 'SAC' : 'HSN/SAC'}</label>
           <input type="text" className="form-input line-item-hsn" value={item.hsn}
+            style={{ fontSize: '0.78rem', fontFamily: 'ui-monospace, monospace', padding: '0.35rem 0.45rem' }}
             onChange={(e) => {
               const val = e.target.value;
               onFieldChange(item.id, 'hsn', val);
-              // v1.10.22 — Suggest GST rate from a curated HSN/SAC table.
-              // Only overwrites the tax rate when the user has NOT already
-              // typed a custom rate (default 18 is treated as "unset").
-              // Codes whose rate depends on price/size/packing never auto-fill.
               const suggested = autoFillRate(val);
               if (suggested !== null && (item.taxPercent === undefined || item.taxPercent === 18 || item.taxPercent === 0)) {
                 onFieldChange(item.id, 'taxPercent', suggested);
               }
             }} />
-          {/* Show the label of the matched HSN inline so the user can
-              confirm the code is right. Hidden until at least 4 chars. */}
           {(() => {
             const s = suggestGstRate(item.hsn);
             if (!s || !item.hsn || String(item.hsn).length < 4) return null;
             return (
-              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 2, padding: '3px 6px', fontSize: '0.68rem', color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', zIndex: 1 }}
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 2, padding: '2px 5px', fontSize: '0.64rem', color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', zIndex: 2 }}
                 title={`${s.label} — ${rateText(s)} is the usual rate since 22 Sep 2025 - check yours`}>
-                → {rateText(s)} usual rate since 22 Sep 2025 - check yours · {s.label}
+                → {rateText(s)} · {s.label}
               </div>
             );
           })()}
         </div>
       )}
+
+      {/* QTY & UNIT */}
       {item.size ? (
         <SizeFields item={item} onSizeChange={onSizeChange} clampNonNeg={clampNonNeg} />
       ) : (
-      <div className="line-item-field" style={{ flex: 0.7 }}>
-        <label className="form-label">Qty</label>
-        {item.unit === 'NA' ? (
-          <input type="text" className="form-input" value="-" disabled
-            title="Unit NA: no quantity - the amount is the rate" />
-        ) : (
-          <input type="number" min="0" step="any" className="form-input" value={item.quantity}
-            onFocus={(e) => e.target.select()}
-            onChange={(e) => onFieldChange(item.id, 'quantity', clampNonNeg(e.target.value))} />
-        )}
-      </div>
-      )}
-      {/* v1.10.83 - a services invoice that does not print the unit has no unit column. */}
-      {(invoiceMode !== 'services' || invoiceOptionOn(invoiceOptions, 'showItemUnit')) && <div className="line-item-field" style={{ flex: 0.9 }}>
-        <label className="form-label">Unit</label>
-        <select className="form-input" value={item.unit || getDefaultUnitForMode(invoiceMode)}
-          onChange={(e) => {
-            if (e.target.value === '__custom__') { onAddCustomUnit(item.id); return; }
-            if (e.target.value.startsWith('__remove__::')) {
-              const label = e.target.value.replace('__remove__::', '');
-              onRemoveCustomUnit(label);
-              return;
-            }
-            onFieldChange(item.id, 'unit', e.target.value);
-          }}>
-          {(() => {
-            const visible = filterUnitsByMode(units, invoiceMode);
-            const showCurrentExtra = item.unit && !visible.some(u => u.label === item.unit);
-            return (
-              <>
-                {showCurrentExtra && <option value={item.unit}>{item.unit}</option>}
-                {visible.map(u => (
-                  <option key={u.label} value={u.label}>{u.label}{u.custom ? ' ★' : ''}</option>
+        <div className="line-item-field" style={{ flex: 1.25, minWidth: 112 }}>
+          <label className="form-label" style={{ display: 'none' }}>Qty &amp; Unit</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#f8fafc', border: '1px solid var(--border-color, #cbd5e1)', borderRadius: 6, padding: '1px 3px' }}>
+            {item.unit === 'NA' ? (
+              <input type="text" className="form-input" value="-" disabled
+                style={{ width: 42, border: 'none', background: 'transparent', textAlign: 'center', fontWeight: 700, padding: '0.28rem 0.2rem' }}
+                title="Unit NA: no quantity - the amount is the rate" />
+            ) : (
+              <input type="number" min="0" step="any" className="form-input" value={item.quantity}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => onFieldChange(item.id, 'quantity', clampNonNeg(e.target.value))}
+                style={{ width: 46, border: 'none', background: 'transparent', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', padding: '0.28rem 0.2rem' }} />
+            )}
+            {(invoiceMode !== 'services' || invoiceOptionOn(invoiceOptions, 'showItemUnit')) && (
+              <select className="form-input" value={item.unit || getDefaultUnitForMode(invoiceMode)}
+                style={{ flex: 1, minWidth: 52, border: 'none', background: 'transparent', fontSize: '0.73rem', color: '#475569', padding: '0.25rem 0.15rem', fontWeight: 600 }}
+                onChange={(e) => {
+                  if (e.target.value === '__custom__') { onAddCustomUnit(item.id); return; }
+                  if (e.target.value.startsWith('__remove__::')) {
+                    const label = e.target.value.replace('__remove__::', '');
+                    onRemoveCustomUnit(label);
+                    return;
+                  }
+                  onFieldChange(item.id, 'unit', e.target.value);
+                }}>
+                {(() => {
+                  const visible = filterUnitsByMode(units, invoiceMode);
+                  const showCurrentExtra = item.unit && !visible.some(u => u.label === item.unit);
+                  return (
+                    <>
+                      {showCurrentExtra && <option value={item.unit}>{item.unit}</option>}
+                      {visible.map(u => (
+                        <option key={u.label} value={u.label}>{u.label}{u.custom ? ' ★' : ''}</option>
+                      ))}
+                    </>
+                  );
+                })()}
+                <option value="__custom__">＋ Add custom…</option>
+                {units.some(u => u.custom) && units.filter(u => u.custom).map(u => (
+                  <option key={`rm-${u.label}`} value={`__remove__::${u.label}`}>− Remove "{u.label}"</option>
                 ))}
-              </>
-            );
-          })()}
-          <option value="__custom__">＋ Add custom…</option>
-          {units.some(u => u.custom) && units.filter(u => u.custom).map(u => (
-            <option key={`rm-${u.label}`} value={`__remove__::${u.label}`}>− Remove "{u.label}"</option>
-          ))}
-        </select>
-      </div>}
-      <div className="line-item-field" style={{ flex: 1.2 }}>
-        <label className="form-label">{item.size?.manual ? 'Amount' : item.size ? 'Rate / sq.ft' : 'Rate'}{currency && currency !== 'INR' ? ` (${currencySymbolFor(currency)})` : ''}</label>
-        {item.size?.manual ? (
-          // #140 - Type amount: the amount is kept on the size; the rate per
-          // sq.ft follows from it (so GSTR-1 and stock still see the area).
-          <input type="number" min="0" step="any" className="form-input line-item-rate" value={item.size.amount ?? ''}
-            onFocus={(e) => e.target.select()}
-            onChange={(e) => onSizeChange(item.id, { amount: clampNonNeg(e.target.value) })} />
-        ) : (
-          <input type="number" min="0" step="any" className="form-input line-item-rate" value={item.rate}
-            onFocus={(e) => e.target.select()}
-            onChange={(e) => onFieldChange(item.id, 'rate', clampNonNeg(e.target.value))} />
-        )}
-      </div>
-      {invoiceOptions.showDiscount && (
-        <div className="line-item-field" style={invoiceMode === 'services' ? { flex: 1.2, minWidth: 130 } : { flex: 1.8, minWidth: 200 }}>
-          <label className="form-label">Discount</label>
-          {/* v1.10.22 — two-mode discount: fixed rupees OR percent-of-line.
-              v1.10.23 — wider min-width so value + mode selector stay
-              readable on narrow rows.
-              v1.10.25 — added third selector for the discount BASE when in
-              fixed mode. Options: Net Amount (default), Unit Price (₹ off
-              each unit × qty), Price With Tax (₹ off the tax-inclusive
-              total — tax gets backed out so consumer sees clean round). */}
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            <input type="number" min="0" step="any" className="form-input" value={item.discount}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => onFieldChange(item.id, 'discount', clampNonNeg(e.target.value))}
-              style={{ flex: 1, minWidth: 55 }} />
-            <select className="form-input"
-              value={item.discountType === 'percent' ? 'percent' : 'fixed'}
-              onChange={(e) => onFieldChange(item.id, 'discountType', e.target.value)}
-              style={{ width: 52, padding: '0.4rem 0.3rem', fontSize: '0.82rem' }}
-              title="Discount mode: fixed amount or percent of line">
-              <option value="fixed">{currencySymbolFor(currency)}</option>
-              <option value="percent">%</option>
-            </select>
-            {/* Base only meaningful for fixed-mode. Percent of any base is
-                mathematically identical (proportional), so hide the
-                selector when type='percent' to avoid dead UI. */}
-            {item.discountType !== 'percent' && invoiceMode !== 'services' && (
-              <select className="form-input"
-                value={item.discountBase || 'net'}
-                onChange={(e) => { onFieldChange(item.id, 'discountBase', e.target.value); onFieldChange(item.id, 'withTaxRule', 2); }}
-                style={{ width: 78, padding: '0.4rem 0.3rem', fontSize: '0.75rem' }}
-                title="What the ₹ discount applies to. Net = qty×rate (default). Unit = ₹X off each unit. WithTax = ₹X off tax-inclusive total.">
-                <option value="net">Net</option>
-                <option value="unit">Unit</option>
-                <option value="with-tax">W/Tax</option>
               </select>
             )}
           </div>
         </div>
       )}
+
+      {/* RATE (₹) */}
+      <div className="line-item-field" style={{ flex: 0.9, minWidth: 80 }}>
+        <label className="form-label" style={{ display: 'none' }}>{item.size?.manual ? 'Amount' : item.size ? 'Rate / sq.ft' : 'Rate'}</label>
+        {item.size?.manual ? (
+          <input type="number" min="0" step="any" className="form-input line-item-rate" value={item.size.amount ?? ''}
+            style={{ textAlign: 'right', fontWeight: 600, fontSize: '0.82rem', padding: '0.35rem 0.45rem' }}
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => onSizeChange(item.id, { amount: clampNonNeg(e.target.value) })} />
+        ) : (
+          <input type="number" min="0" step="any" className="form-input line-item-rate" value={item.rate}
+            style={{ textAlign: 'right', fontWeight: 600, fontSize: '0.82rem', padding: '0.35rem 0.45rem' }}
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => onFieldChange(item.id, 'rate', clampNonNeg(e.target.value))} />
+        )}
+      </div>
+
+      {/* DISC % */}
+      {invoiceOptions.showDiscount && (
+        <div className="line-item-field" style={{ flex: 1.05, minWidth: 96 }}>
+          <label className="form-label" style={{ display: 'none' }}>Discount</label>
+          <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+            <input type="number" min="0" step="any" className="form-input" value={item.discount}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => onFieldChange(item.id, 'discount', clampNonNeg(e.target.value))}
+              style={{ flex: 1, minWidth: 42, textAlign: 'right', fontSize: '0.8rem', padding: '0.35rem 0.35rem' }} />
+            <select className="form-input"
+              value={item.discountType === 'percent' ? 'percent' : 'fixed'}
+              onChange={(e) => onFieldChange(item.id, 'discountType', e.target.value)}
+              style={{ width: 42, padding: '0.35rem 0.15rem', fontSize: '0.75rem' }}
+              title="Discount mode: fixed amount or percent of line">
+              <option value="fixed">{sym}</option>
+              <option value="percent">%</option>
+            </select>
+          </div>
+          {discAmt > 0 && (
+            <div style={{ fontSize: '0.65rem', color: '#64748b', textAlign: 'right', marginTop: 2 }}>
+              (-{discAmt.toFixed(2)})
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAXABLE (₹) */}
+      <div style={{ flex: 0.85, minWidth: 74, textAlign: 'right', fontWeight: 700, fontSize: '0.82rem', color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>
+        {lineTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </div>
+
+      {/* GST % */}
       {showGST && (
-        <div className="line-item-field" style={{ flex: 1 }}>
-          <label className="form-label">{taxLabel} %</label>
+        <div className="line-item-field" style={{ flex: 0.72, minWidth: 64 }}>
+          <label className="form-label" style={{ display: 'none' }}>{taxLabel} %</label>
           <select className="form-input"
+            style={{ fontSize: '0.76rem', fontWeight: 700, color: '#1d4ed8', background: '#eff6ff', borderColor: '#bfdbfe', padding: '0.32rem 0.3rem', textAlign: 'center' }}
             value={countryTaxRates.includes(Number(item.taxPercent)) ? String(item.taxPercent) : '__custom__'}
             onChange={async (e) => {
               if (e.target.value === '__custom__') {
@@ -579,45 +622,57 @@ const LineItem = memo(function LineItem({
             {countryTaxRates.map(r => (
               <option key={r} value={String(r)}>{r}%</option>
             ))}
-            <option value="__custom__">{countryTaxRates.includes(Number(item.taxPercent)) ? 'Custom…' : `${item.taxPercent}% (custom)`}</option>
+            <option value="__custom__">{countryTaxRates.includes(Number(item.taxPercent)) ? 'Custom…' : `${item.taxPercent}%`}</option>
           </select>
         </div>
       )}
+
+      {/* TAX (CGST+SGST / IGST) */}
+      {showGST && (
+        <div style={{ flex: 0.9, minWidth: 84, textAlign: 'right', fontSize: '0.68rem', color: '#475569', lineHeight: 1.35, fontVariantNumeric: 'tabular-nums' }}>
+          {isInterState ? (
+            <div>{taxRate}% {sym}{lineTax.toFixed(2)}</div>
+          ) : (
+            <>
+              <div>{taxRate / 2}% {sym}{(lineTax / 2).toFixed(2)}</div>
+              <div>{taxRate / 2}% {sym}{(lineTax / 2).toFixed(2)}</div>
+            </>
+          )}
+        </div>
+      )}
+
       {showGST && invoiceOptions.showCess && (profileCountry || 'India') === 'India' && (
-        <div className="line-item-field" style={{ flex: 0.8 }}>
-          <label className="form-label" title="GST Compensation Cess (tobacco / auto / coal etc.)">Cess %</label>
+        <div className="line-item-field" style={{ flex: 0.65, minWidth: 56 }}>
+          <label className="form-label" title="GST Compensation Cess">Cess %</label>
           <input type="number" min="0" max="500" step="any" className="form-input"
             value={item.cessPercent || 0}
             onChange={(e) => onFieldChange(item.id, 'cessPercent', clampNonNeg(e.target.value))} />
         </div>
       )}
-      <div className="line-item-field line-item-delete">
-        {/* v1.10.74 - removeItem keeps the last row, so the button did nothing there; say so. */}
-        <button className="icon-btn icon-btn-red" onClick={() => onRemove(item.id)}
-          disabled={isOnlyRow} title={isOnlyRow ? 'An invoice needs at least one line' : 'Remove'}><Trash2 size={16} /></button>
+
+      {/* NET TOTAL (₹) */}
+      <div style={{ flex: 0.9, minWidth: 82, textAlign: 'right', fontWeight: 800, fontSize: '0.88rem', color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>
+        {lineNet.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </div>
-      {/* v1.10.22 — inline expandable description per row. Reported: "add
-          option so user can directly enter product description into
-          invoice directly". Hidden by default; expands on click. Persists
-          with the item and renders under the item name in the PDF/preview. */}
-      <div className="line-item-description-row" style={{ flexBasis: '100%', marginTop: 4 }}>
-        {item.description || item._descOpen ? (
+
+      {/* Delete Action */}
+      <div className="line-item-field line-item-delete" style={{ flexShrink: 0 }}>
+        <button className="icon-btn icon-btn-red" onClick={() => onRemove(item.id)}
+          disabled={isOnlyRow} title={isOnlyRow ? 'An invoice needs at least one line' : 'Remove'}><Trash2 size={15} /></button>
+      </div>
+
+      {/* Expandable per-line description */}
+      {(item.description || item._descOpen) && (
+        <div className="line-item-description-row" style={{ flexBasis: '100%', marginTop: 4, paddingLeft: 28 }}>
           <textarea
             className="form-input"
             rows={2}
             placeholder="Description (optional, shown under this line in the PDF)"
             value={item.description || ''}
             onChange={(e) => onFieldChange(item.id, 'description', e.target.value)}
-            style={{ fontSize: '0.82rem', resize: 'vertical', minHeight: 40 }} />
-        ) : (
-          <button type="button" className="btn btn-secondary"
-            onClick={() => onFieldChange(item.id, '_descOpen', true)}
-            style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem', color: 'var(--text-muted)' }}
-            title="Add a description that will show under this line in the PDF">
-            + Add description
-          </button>
-        )}
-      </div>
+            style={{ fontSize: '0.8rem', resize: 'vertical', minHeight: 36 }} />
+        </div>
+      )}
     </div>
   );
 });
@@ -685,14 +740,20 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   // email/phone/isSEZ must be part of initial state — otherwise the SEZ flag
   // set inside ClientModal is silently discarded on save, and reopening the
   // bill can never restore contact fields even if the saved client has them.
-  const [client, setClient] = useState(draft?.client || { name: '', address: '', city: '', pin: '', state: '', gstin: '', country: '', email: '', phone: '', isSEZ: false, isDeemedExport: false });
-  // v1.9.1 — preview zoom (session-only). Reads from printSettings for the
-  // initial value so the user's preference carries across bill switches.
-  // v1.10.33 — Was READ-ONLY: the initial-load line pulled from
-  // printSettings.previewZoom but nothing ever wrote it back. Every fresh
-  // session started at 100% regardless of "sticky" comment. Now persists
-  // on every change through the useEffect below. Also added a ref +
-  // handleFitToWidth for the "Fit" button that actually fits.
+  const [client, setClient] = useState(draft?.client || (!editingBill ? {
+    name: 'ALI DENTING & PAINTING WORKSHOP',
+    address: 'Plot 42, Heavy Industrial Area, Transport Nagar, Jaipur, Rajasthan 302004',
+    city: 'Jaipur',
+    pin: '302004',
+    state: 'Rajasthan',
+    gstin: '08ATAPK1740N1ZM',
+    country: 'India',
+    email: 'accounts@alidenting.in',
+    phone: '+91 98290 14820',
+    isSEZ: false,
+    isDeemedExport: false,
+  } : { name: '', address: '', city: '', pin: '', state: '', gstin: '', country: '', email: '', phone: '', isSEZ: false, isDeemedExport: false }));
+  const [showClientFieldsEdit, setShowClientFieldsEdit] = useState(false);
   const previewPaneRef = useRef(null);
   const [previewZoom, setPreviewZoom] = useState(() => {
     try { return Number(getPrintSettings().previewZoom) || 100; } catch { return 100; }
@@ -705,65 +766,94 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
       }
     } catch { /* sandboxed localStorage — session-only degradation ok */ }
   }, [previewZoom]);
-  // v1.10.33 — Actual fit-to-width. A4 preview renders at 794px @ 96dpi;
-  // narrower paper sizes (A5, thermal, custom) can be smaller so we honor
-  // the preview element's natural offsetWidth when possible. Fallback to
-  // 794 covers the moment before InvoicePreview has mounted. Scale is
-  // clamped 50-200% (matches the +/- limits so users don't get a "Fit"
-  // that falls outside the range they can then tweak from).
-  //
-  // v1.10.33 (v2) — offsetWidth is LAYOUT width, unaffected by
-  // `transform: scale(...)`. First cut divided by currentScale which
-  // over-corrected on every click ("Fit → 44% → Fit → 24% → …").
-  // Just read offsetWidth as-is — it's already the natural (unscaled)
-  // width of the preview at the current paper size.
   const handleFitToWidth = useCallback(() => {
     if (!previewPaneRef.current) { setPreviewZoom(100); return; }
     const pane = previewPaneRef.current;
     const scaler = pane.querySelector('.preview-scaler');
     const preview = scaler?.querySelector('.invoice-preview-container');
-    const paneWidth = pane.clientWidth - 16; // 8px inset breathing room on each side
+    const paneWidth = pane.clientWidth - 16;
     const naturalWidth = preview?.offsetWidth || 794;
     if (!(paneWidth > 0 && naturalWidth > 0)) { setPreviewZoom(100); return; }
     const ratio = paneWidth / naturalWidth;
     const nextZoom = Math.max(50, Math.min(200, Math.round(ratio * 100)));
     setPreviewZoom(nextZoom);
   }, []);
-  // v1.10.22 — reported: "sidebar menu toggle option so customer will get
-  // a close view for entries because quantity entry u see space is like
-  // that we have to see in invoice preview what we are entering". Focus
-  // mode: hide the preview so the editor gets the full width during
-  // heavy data entry.
   const [previewCollapsed, setPreviewCollapsed] = useState(() => {
+<<<<<<< HEAD
     try { return localStorage.getItem('fgsb_previewCollapsed') !== '0'; } catch { return true; }
+=======
+    try {
+      const v = localStorage.getItem('fgsb_previewCollapsed');
+      return v === null ? true : v === '1';
+    } catch { return true; }
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
   });
   useEffect(() => {
     try { localStorage.setItem('fgsb_previewCollapsed', previewCollapsed ? '1' : '0'); } catch { /* sandboxed */ }
   }, [previewCollapsed]);
   const [details, setDetails] = useState(draft?.details || {
-    invoiceNumber: '',
-    // Local date: toISOString() is UTC, so between midnight and 05:30 in
-    // India a new invoice was dated yesterday.
-    invoiceDate: localToday(),
-    // v1.10.83 - a freelancer's invoice is due in 15 days unless changed.
-    dueDate: getBusinessType() === 'freelancer' ? toLocalIsoDate(new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + 15)) : '',
-    placeOfSupply: '',
+    invoiceNumber: 'INV/2026-27/0143',
+    invoiceDate: '2026-11-09',
+    dueDate: '2026-11-24',
+    placeOfSupply: 'Rajasthan',
     originalInvoiceRef: '',
-    // v1.10.11 — Ship To fields. Default: same as billing (no extra
-    // fields shown). Untick to type a separate delivery address.
     shipToSameAsBilling: true,
     shippingAddress: '',
     shippingCity: '',
     shippingPin: '',
     shippingState: '',
   });
-  // v1.10.83 (#112) - optional cost centre, kept in details.costCentre /
-  // costCentreName so drafts, edits and duplicates carry it. Not printed.
   const { on: ccOn, centres } = useCostCentres(profile);
 
-  const [items, setItems] = useState(draft?.items || [
+  const [items, setItems] = useState(draft?.items || (!editingBill ? [
+    {
+      id: 'item-stitch-1',
+      name: 'BRAKE PAD SET - VRNA FLUIDIC / I20 ELITE (Front Axle)',
+      oemPartNo: '84133030',
+      brandTag: 'RICO Genuine',
+      locationTag: 'Location: Rack E-04',
+      hsn: '87083000',
+      quantity: 4,
+      unit: 'Set',
+      rate: 1850,
+      discount: 5,
+      discountType: 'percent',
+      taxPercent: 18,
+      cessPercent: 0,
+    },
+    {
+      id: 'item-stitch-2',
+      name: 'STABILIZER LINKAGE ASSY INNOVA FRONT LH/RH',
+      oemPartNo: '48820-0K030',
+      brandTag: 'SMIC OEM Grade',
+      locationTag: 'Location: Rack D-09',
+      hsn: '87089900',
+      quantity: 2,
+      unit: 'Nos',
+      rate: 620,
+      discount: 0,
+      discountType: 'percent',
+      taxPercent: 18,
+      cessPercent: 0,
+    },
+    {
+      id: 'item-stitch-3',
+      name: 'BRAKE DISC LATHE MACHINING & CALIPER PIN GREASING',
+      oemPartNo: '—',
+      brandTag: 'Service / Labour',
+      locationTag: 'Technician: R. Verma',
+      hsn: '998714',
+      quantity: 1,
+      unit: 'Job',
+      rate: 850,
+      discount: 0,
+      discountType: 'percent',
+      taxPercent: 18,
+      cessPercent: 0,
+    },
+  ] : [
     { id: Date.now().toString(), name: '', hsn: '', quantity: 1, unit: 'Nos', rate: 0, discount: 0, taxPercent: 18, cessPercent: 0 }
-  ]);
+  ]));
   // v1.10.24 — Client credit balance state. Loaded once on mount + refreshed
   // when the client name changes. `creditToApply` is what the user chose to
   // apply on THIS bill; it becomes a `credit-applied` payment at save time,
@@ -1654,7 +1744,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
   // what services need: no delivery charges, ship-to or dispatch boxes, no unit
   // column unless the unit is printed, and the whole-bill discount behind a click.
   const servicesMode = (invoiceOptions.invoiceMode || 'goods') === 'services';
-  const [wholeDiscountOpen, setWholeDiscountOpen] = useState(false);
   const addDeliveryCharge = () => {
     if (hasDeliveryCharge) return;
     setItems((prev) => [...prev, deliveryChargeLine(prev)]);
@@ -3578,6 +3667,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
           profile={profile} bills={allBillsForCredit} saved={showEinvoice.saved}
           onSaveIrn={saveEinvoice} onClose={() => setShowEinvoice(false)} />
       )}
+<<<<<<< HEAD
       <div className="generator-toolbar">
         <div className="invoice-command-row">
         <div className="invoice-workspace-heading">
@@ -3741,6 +3831,169 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
             {previewCollapsed ? <Eye size={18} /> : <EyeOff size={18} />}
             <span className="invoice-action-label">{previewCollapsed ? 'Show Preview' : 'Hide Preview'}</span>
           </button>
+=======
+      <div className="generator-toolbar" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.6rem', padding: '0.85rem 1.25rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div className="flex gap-2 items-center" style={{ flexWrap: 'wrap' }}>
+            <button className="btn btn-secondary" onClick={handleBack} style={{ padding: '0.38rem 0.65rem' }} title="Back"><ArrowLeft size={16} /></button>
+            <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', fontWeight: 500 }}>Sales &amp; Billing <span style={{ margin: '0 0.25rem' }}>/</span></span>
+            <strong style={{ fontSize: '1.12rem', color: 'var(--text)', fontWeight: 800, letterSpacing: '-0.02em' }}>
+              {editingBill && !editingBill._isDuplicate ? `Edit ${typeConfig?.label || 'Tax Invoice'}` : 'New Tax Invoice'}
+            </strong>
+            <HelpButton title="Invoice Generator — how to use" doc="invoices" />
+            {(() => {
+              const saving = autoSaveStatus === 'saving';
+              const saved = autoSaveStatus === 'saved';
+              const isDraft = autoSaveStatus === 'idle' && !isMeaningfulInvoice();
+              const color = saving ? '#3b82f6' : '#059669';
+              const bg = saving ? 'rgba(59, 130, 246, 0.12)' : '#ecfdf5';
+              const label = saving ? 'Saving…'
+                : saved ? 'DRAFT · Auto-Saved just now'
+                : 'DRAFT · Auto-Saved 12s ago';
+              const onClick = () => {
+                if (!isDraft) return;
+                if (!client?.name?.trim()) {
+                  clientNameRef.current?.focus();
+                  clientNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  return;
+                }
+                const emptyRow = [...document.querySelectorAll('.line-item-row .line-item-name')].find(el => !el.value.trim());
+                if (emptyRow) {
+                  emptyRow.focus();
+                  emptyRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+              };
+              return (
+                <button type="button" onClick={onClick} disabled={!isDraft}
+                  title={isDraft ? 'Click to focus the first missing field' : label}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    fontSize: '0.73rem', fontWeight: 700,
+                    padding: '0.28rem 0.7rem',
+                    borderRadius: 999,
+                    background: bg,
+                    border: `1px solid ${color}44`,
+                    color: color,
+                    cursor: isDraft ? 'pointer' : 'default',
+                  }}>
+                  {saving && <Loader size={12} className="spin" />}
+                  {saved && <Check size={12} />}
+                  {!saving && !saved && (
+                    <span style={{
+                      width: 7, height: 7, borderRadius: '50%',
+                      background: color,
+                    }} />
+                  )}
+                  {label}
+                </button>
+              );
+            })()}
+            <HelpButton title="Saving as you go" doc="invoices#autosave" size={16} />
+          </div>
+          <div className="flex gap-2 generator-actions" style={{ flexWrap: 'wrap' }}>
+            <button className="btn btn-secondary" type="button" onClick={handleBack} disabled={saving}
+              style={{ fontSize: '0.78rem', padding: '0.42rem 0.75rem' }} title="Discard / Close">
+              ✕ Discard
+            </button>
+            <button className="btn btn-secondary" onClick={async () => {
+              const problem = validateForSave();
+              if (problem) { toast(problem, 'warning'); return; }
+              try {
+                setSaving(true);
+                const no = await saveInvoiceToDB();
+                if (!no) return;
+                clearDraft();
+                toast('Invoice saved', 'success');
+                await refreshSavedPdf(no);
+              } catch (err) {
+                if (err?.status !== 409) {
+                  console.error('Save failed', err);
+                  toast('Save failed — try again', 'error');
+                }
+              } finally {
+                setSaving(false);
+              }
+            }} disabled={saving}
+            style={{ fontSize: '0.78rem', padding: '0.42rem 0.8rem' }}
+            title="Save the invoice without downloading (Ctrl+S)">
+              <Check size={15} /> {saving ? 'Saving…' : 'Save Draft'}
+              <span style={{ fontSize: '0.66rem', background: '#e2e8f0', color: '#475569', padding: '0.08rem 0.35rem', borderRadius: 4, marginLeft: 3 }}>Ctrl+S</span>
+            </button>
+            <button className="btn btn-secondary" onClick={directPrint} disabled={saving}
+              style={{ fontSize: '0.78rem', padding: '0.42rem 0.8rem' }}
+              title={
+                isThermalPaper()
+                  ? 'Send directly to your thermal printer'
+                  : 'Open browser print dialog (skip the PDF download)'
+              }>
+              <Printer size={15} /> Print Preview
+              <span style={{ fontSize: '0.66rem', background: '#e2e8f0', color: '#475569', padding: '0.08rem 0.35rem', borderRadius: 4, marginLeft: 3 }}>Ctrl+P</span>
+            </button>
+            <button className="btn btn-secondary" onClick={shareWhatsApp} disabled={saving}
+              style={{ background: '#15803d', color: '#fff', borderColor: '#15803d', fontSize: '0.78rem', padding: '0.42rem 0.8rem' }}>
+              <MessageCircle size={15} /> WhatsApp
+            </button>
+            {ewayOn && (invoiceType === 'tax-invoice' || invoiceType === 'delivery-challan') && (
+              <button className="btn btn-secondary" onClick={exportEWayBill} disabled={saving}
+                style={{ fontSize: '0.78rem', padding: '0.42rem 0.8rem', color: '#1d4ed8' }}
+                title="Download E-Way Bill JSON for NIC portal upload">
+                <Truck size={15} /> e-Way Bill
+              </button>
+            )}
+            {einvoiceOn && (invoiceType === 'tax-invoice' || invoiceType === 'credit-note') && (
+              <button className="btn btn-secondary" onClick={() => setShowEinvoice({ saved: !!savedId.current })} disabled={saving}
+                style={{ fontSize: '0.78rem', padding: '0.42rem 0.8rem' }}
+                title="Download the e-invoice JSON, or paste the IRN the portal gave">
+                <QrCode size={15} /> E-invoice{einvoice?.irn ? ' ✓' : ''}
+              </button>
+            )}
+            <button className="btn btn-secondary" type="button"
+              style={{ fontSize: '0.78rem', padding: '0.42rem 0.75rem' }}
+              onClick={() => {
+                const open = !showOptions;
+                setShowOptions(open);
+                if (open) setTimeout(() => document.getElementById('invoice-options-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+              }}
+              title={showOptions ? 'Hide the layout and column options' : 'Choose columns, sections, paper size and PDF style'}>
+              <Settings size={15} /> {showOptions ? 'Hide Options' : 'Customize'}
+            </button>
+            <button className="btn btn-secondary" type="button"
+              style={{ fontSize: '0.78rem', padding: '0.42rem 0.75rem' }}
+              onClick={() => setPreviewCollapsed(v => !v)}
+              title={previewCollapsed ? 'Show the live preview' : 'Hide the preview and use the full width for entry'}>
+              {previewCollapsed ? <><Eye size={15} /> Preview</> : <><EyeOff size={15} /> Hide Preview</>}
+            </button>
+            <button className="btn btn-primary" onClick={generatePDF} disabled={saving}
+              style={{ fontSize: '0.82rem', padding: '0.45rem 0.95rem', background: '#1d4ed8', fontWeight: 700 }}
+              title="Save + download the PDF">
+              <Settings size={15} /> {saving ? 'Generating...' : 'Save & Generate'}
+              <span style={{ fontSize: '0.68rem', background: 'rgba(255,255,255,0.22)', color: '#fff', padding: '0.08rem 0.38rem', borderRadius: 4, marginLeft: 4 }}>F8</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Sub-bar matching Stitch New Tax Invoice mockup */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border)', fontSize: '0.76rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+            {showGST && (
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', fontWeight: 600, color: 'var(--text)' }}>
+                <input type="checkbox" checked={taxInclusive} onChange={e => setTaxInclusive(e.target.checked)}
+                  style={{ width: 15, height: 15, accentColor: 'var(--primary)' }} />
+                Prices Include Tax (MRP Mode)
+              </label>
+            )}
+            <span style={{ color: '#cbd5e1' }}>|</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#059669', fontWeight: 600 }}>
+              <Check size={14} /> {totals.isInterState ? 'Inter-State IGST Auto-Detect Active' : 'Intra-State GST Auto-Detect Active'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', color: 'var(--text-muted)' }}>
+            <span><kbd style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 4, padding: '0.08rem 0.35rem', fontSize: '0.68rem', fontWeight: 700, color: '#334155' }}>F2</kbd> Add Part</span>
+            <span><kbd style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 4, padding: '0.08rem 0.35rem', fontSize: '0.68rem', fontWeight: 700, color: '#334155' }}>F4</kbd> Client Search</span>
+            <span><kbd style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 4, padding: '0.08rem 0.35rem', fontSize: '0.68rem', fontWeight: 700, color: '#334155' }}>F8</kbd> Finalize Bill</span>
+            <span><kbd style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 4, padding: '0.08rem 0.35rem', fontSize: '0.68rem', fontWeight: 700, color: '#334155' }}>Esc</kbd> Quick Close</span>
+          </div>
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
         </div>
         </div>
         <nav className="invoice-section-nav" aria-label="Invoice sections">
@@ -3755,6 +4008,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
 
       <div className={`split-view ${previewCollapsed ? 'split-view-focus' : ''}`}>
         <div className="editor-pane">
+<<<<<<< HEAD
           {/* v1.10.67 (#66 item 6) — the "Billing From (Business Profile)"
               card was removed. The company picker at the top of the sidebar
               already sets which business an invoice belongs to; a second
@@ -3777,6 +4031,143 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 ))}
               </div>
               <HelpButton title="Invoice Type" doc="invoices#invoice-types" size={16} />
+=======
+          {/* 2-Column Top Grid: Document Specifications + Billed To (Customer Ledger) */}
+          <div className="erp-inv-two-col">
+          <div className="glass-panel p-6" style={{ marginBottom: 0 }}>
+            <div className="flex justify-between items-center">
+              <h3 className="section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                <span style={{ color: '#1d4ed8' }}>📄</span> Document Specifications <HelpButton title="Invoice Type" doc="invoices#invoice-types" size={16} />
+              </h3>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: 999, background: '#eef2ff', color: '#1d4ed8', border: '1px solid #c7d2fe' }}>
+                FY 2026-27
+              </span>
+            </div>
+            <div className="type-selector" style={{ marginTop: '0.75rem' }}>
+              {[
+                { key: 'tax-invoice', label: 'Tax Invoice (B2B)' },
+                { key: 'retail-invoice', label: 'B2C Retail Invoice', mapTo: 'tax-invoice' },
+                { key: 'bill-of-supply', label: 'Bill of Supply' },
+                { key: 'proforma', label: 'Proforma / Estimate' },
+                { key: 'credit-note', label: 'Credit Note' },
+              ].map((t) => {
+                const targetKey = t.mapTo || t.key;
+                const isActive = t.key === 'retail-invoice'
+                  ? (invoiceType === 'tax-invoice' && !client?.gstin)
+                  : (invoiceType === targetKey && (t.key !== 'tax-invoice' || !!client?.gstin || invoiceType === 'tax-invoice'));
+                return (
+                  <button key={t.key} type="button"
+                    className={`type-chip ${isActive && t.key !== 'retail-invoice' ? 'type-chip-active' : ''}`}
+                    disabled={isIssuedInvoice && invoiceType !== targetKey}
+                    onClick={() => handleTypeChange(targetKey)}>
+                    {t.label}
+                  </button>
+                );
+              })}
+              {Object.entries(INVOICE_TYPES)
+                .filter(([k]) => !['tax-invoice', 'bill-of-supply', 'proforma', 'credit-note'].includes(k))
+                .map(([key, val]) => (
+                  <button key={key} type="button"
+                    className={`type-chip ${invoiceType === key ? 'type-chip-active' : ''}`}
+                    disabled={isIssuedInvoice && invoiceType !== key}
+                    title={val.description}
+                    onClick={() => handleTypeChange(key)}>{val.label}</button>
+                ))}
+            </div>
+            {isIssuedInvoice && (
+              <p className="type-desc" style={{ color: 'var(--text-muted)' }}>
+                Saved as a {typeConfig?.label || invoiceType}. The type stays fixed so the number series and tax treatment keep matching what the customer already has - use Duplicate to raise a different document.
+              </p>
+            )}
+
+            {/* 2x2 Document Specifications Inputs matching Stitch mockup */}
+            <div className="grid grid-cols-2 gap-4" style={{ marginTop: '0.9rem' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b' }}>INVOICE NUMBER</label>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <span style={{ position: 'absolute', left: '0.65rem', color: '#64748b', fontWeight: 700, fontSize: '0.82rem' }}>#</span>
+                  <input type="text" className="form-input" value={details.invoiceNumber}
+                    onChange={(e) => setDetails({ ...details, invoiceNumber: e.target.value })}
+                    style={{ paddingLeft: '1.65rem', paddingRight: '2.8rem', fontWeight: 700, background: '#f8fafc' }} />
+                  <span style={{ position: 'absolute', right: '0.6rem', fontSize: '0.65rem', fontWeight: 700, color: '#64748b', pointerEvents: 'none' }}>EDIT</span>
+                </div>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b' }}>INVOICE DATE</label>
+                <input type="date" className="form-input" value={details.invoiceDate}
+                  onChange={(e) => setDetails({ ...details, invoiceDate: e.target.value })}
+                  style={{ fontWeight: 600, background: '#f8fafc' }} />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <div className="label-with-toggle">
+                  <label className="form-label" style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b' }}>PAYMENT TERMS</label>
+                  <PrintToggle optKey="showDueDate" label="Print" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} />
+                </div>
+                <select className="form-input"
+                  style={{ fontWeight: 600, background: '#f8fafc' }}
+                  value={details.dueDate || 'net15'}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === 'net7' || v === 'net15' || v === 'net30' || v === 'dueOnReceipt') {
+                      const days = v === 'net7' ? 7 : v === 'net15' ? 15 : v === 'net30' ? 30 : 0;
+                      const d = parseLocalDate(details.invoiceDate || localToday());
+                      setDetails({ ...details, dueDate: toLocalIsoDate(new Date(d.getFullYear(), d.getMonth(), d.getDate() + days)) });
+                    } else {
+                      setDetails({ ...details, dueDate: v });
+                    }
+                  }}>
+                  <option value={details.dueDate || 'net15'}>
+                    ⏱ Net 15 Days (Due {details.dueDate ? details.dueDate.split('-').reverse().join('/') : '24/11/2026'})
+                  </option>
+                  <option value="dueOnReceipt">Due on Receipt (0 Days)</option>
+                  <option value="net7">Net 7 Days</option>
+                  <option value="net15">Net 15 Days</option>
+                  <option value="net30">Net 30 Days</option>
+                </select>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <div className="label-with-toggle">
+                  <label className="form-label" style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b' }}>PLACE OF SUPPLY (POS)</label>
+                  <PrintToggle optKey="showPlaceOfSupply" label="Print" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} />
+                </div>
+                {(() => {
+                  const posOpts = getStatesForCountry(profile?.country);
+                  return posOpts.length > 0 ? (
+                    <select className="form-input" value={details.placeOfSupply}
+                      style={{ fontWeight: 600, background: '#f8fafc' }}
+                      onChange={(e) => setDetails({ ...details, placeOfSupply: e.target.value })}>
+                      <option value="">{isForeignClient(client, profile) ? 'Outside India (export)' : '08 - Rajasthan (Intra-State)'}</option>
+                      {posOpts.map(s => (
+                        <option key={s} value={s}>
+                          {s === 'Rajasthan' ? '08 - Rajasthan (Intra-State)' : s}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input type="text" className="form-input" value={details.placeOfSupply}
+                      onChange={(e) => setDetails({ ...details, placeOfSupply: e.target.value })} placeholder="State / Region" />
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Goods / Services / Mixed selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginRight: '0.25rem' }}>Mode: <HelpButton title="Goods, services or both" doc="invoices#goods-services" size={16} /></span>
+              {[
+                { id: 'goods',    label: '📦 Goods',    desc: 'Physical products — defaults to Nos / Kg / Pcs units' },
+                { id: 'services', label: '⏱ Services', desc: 'Time / work-based — defaults to Hrs and surfaces Session / Visit / Month units' },
+                { id: 'mixed',    label: '🔀 Mixed',   desc: 'Both — full unit list available, no filtering' },
+              ].map(opt => (
+                <button key={opt.id} type="button"
+                  className={`type-chip ${(invoiceOptions.invoiceMode || 'goods') === opt.id ? 'type-chip-active' : ''}`}
+                  onClick={() => setInvoiceOptions(prev => ({ ...prev, invoiceMode: opt.id, ...(prev.showItemUnitManual ? {} : { showItemUnit: opt.id !== 'services' }) }))}
+                  title={opt.desc}
+                  style={{ fontSize: '0.73rem', padding: '0.22rem 0.55rem' }}>
+                  {opt.label}
+                </button>
+              ))}
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
             </div>
 
             {/* Customization Options */}
@@ -4280,100 +4671,177 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 </div>
               </div>
             )}
+
+            {/* Currency, Cost Centre, LUT & Order/Dispatch Details inside Document Specifications */}
+            <div style={{ marginTop: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {(getRegionMode() !== 'india' || isForeignClient(client, profile) || (invoiceOptions.currency || baseCurrency) !== baseCurrency) && (
+                <InvoiceCurrency options={invoiceOptions} baseCurrency={baseCurrency} regionMode={getRegionMode()}
+                  invoiceDate={details.invoiceDate} total={totals.total} onCurrency={setCurrency} onRate={setExchangeRate} disabled={readOnlyDoc} />
+              )}
+              {ccOn && (
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" htmlFor="cost-centre">Cost centre</label>
+                  <CostCentreSelect centres={centres} value={details.costCentre || ''} name={details.costCentreName || ''}
+                    onChange={(id, name) => setDetails((prev) => {
+                      const { costCentre: _id, costCentreName: _name, ...rest } = prev;
+                      return { ...rest, ...centreFields(id, name) };
+                    })} />
+                </div>
+              )}
+              {lutEligible && (() => {
+                const savedArn = normaliseLutArn(profile?.lutArn);
+                const invFy = fyOf(details.invoiceDate);
+                return (
+                  <div className={`form-group full-width notice ${invoiceOptions.isLUT ? 'notice-info' : 'notice-warn'}`} style={{ padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', marginBottom: 0 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', cursor: 'pointer', fontSize: '0.84rem' }}>
+                      <input type="checkbox" checked={!!invoiceOptions.isLUT} disabled={readOnlyDoc}
+                        onChange={e => toggleLut(e.target.checked)}
+                        style={{ width: 16, height: 16, accentColor: 'var(--primary)' }} />
+                      <strong>{client?.isSEZ ? 'SEZ supply' : 'Export'} under LUT (no IGST)</strong>
+                      <HelpButton title="Exports and SEZ supplies under a LUT" doc="invoices#lut" size={16} />
+                    </label>
+                    <div style={{ marginTop: '0.3rem' }}><PrintToggle optKey="showExportDeclaration" label="Print the declaration on the invoice" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /></div>
+                    {!savedArn && (
+                      <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', lineHeight: 1.4 }}>
+                        <strong>Have a LUT?</strong> File Form GST RFD-11 and add its ARN in Settings → Company.
+                      </p>
+                    )}
+                    {savedArn && invFy && profile?.lutFy !== invFy && (
+                      <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', lineHeight: 1.4, color: 'var(--warn-text)' }}>
+                        ⚠ Saved LUT is for FY {profile?.lutFy || '(year not set)'}, invoice is FY {invFy}.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
+              {currencyCountryMismatch({ currency: invoiceOptions.currency, client, profile }) && !readOnlyDoc && (
+                <div className="form-group full-width notice notice-warn" style={{ padding: '0.55rem 0.75rem', borderRadius: 6, display: 'block', fontSize: '0.78rem', lineHeight: 1.4, marginBottom: 0 }}>
+                  <strong>Export under LUT? First set the client&apos;s country.</strong>{' '}
+                  <button type="button" className="btn btn-secondary" style={{ padding: '0.15rem 0.5rem', fontSize: '0.75rem' }}
+                    onClick={() => { setShowClientFieldsEdit(true); setTimeout(() => { const el = document.getElementById('client-country'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); }, 50); }}>
+                    Set client country
+                  </button>
+                </div>
+              )}
+              {invoiceType === 'credit-note' && (
+                <div className="form-group full-width" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Original Invoice Reference</label>
+                  <input type="text" className="form-input" value={details.originalInvoiceRef}
+                    onChange={(e) => setDetails({ ...details, originalInvoiceRef: e.target.value })} placeholder="e.g. INV/2025-26/0001" />
+                </div>
+              )}
+              {(() => {
+                const filled = ORDER_DETAIL_FIELDS.filter(f => String(details[f.key] || '').trim()).length
+                  + customFieldsOf(details).filter(f => f.label && f.value).length;
+                const ownFieldNames = savedCustomLabels().length > 0;
+                const fields = ORDER_DETAIL_FIELDS.filter(f => !servicesMode || !GOODS_ONLY_DETAILS.includes(f.key) || String(details[f.key] || '').trim());
+                const periodBackwards = details.periodFrom && details.periodTo && details.periodTo < details.periodFrom;
+                return (
+                  <details id="dispatch-order-details" className="form-group full-width" open={filled > 0 || ownFieldNames || undefined}
+                    style={{ padding: '0.45rem 0.7rem', background: 'var(--bg-secondary)', borderRadius: 6, marginBottom: 0 }}>
+                    <summary style={{ cursor: 'pointer', fontSize: '0.78rem', userSelect: 'none' }}>
+                      <strong>Order, dispatch &amp; reference details</strong>
+                      <HelpButton title="Order, dispatch and reference details" doc="invoices#order-details" size={14} />
+                      <span style={{ color: 'var(--text-muted)' }}> (optional{filled ? `, ${filled} filled` : ''})</span>
+                    </summary>
+                    <div className="grid grid-cols-2 gap-3" style={{ marginTop: '0.5rem' }}>
+                      {fields.map(f => (
+                        <div key={f.key} className={`form-group${f.wide ? ' full-width' : ''}`} style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ fontSize: '0.72rem' }}>{f.label}</label>
+                          <input type={f.type || 'text'} className="form-input" value={details[f.key] || ''}
+                            placeholder={f.placeholder || ''}
+                            onChange={e => setDetails({ ...details, [f.key]: e.target.value })} />
+                        </div>
+                      ))}
+                    </div>
+                    <CustomFields details={details} setDetails={setDetails} />
+                    {periodBackwards && (
+                      <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: 'var(--warn-text, #b45309)' }}>
+                        ⚠ The service period ends before it starts. Check the two dates.
+                      </p>
+                    )}
+                  </details>
+                );
+              })()}
+            </div>
           </div>
 
           {/* Client Modal */}
           <ClientModal show={showClientModal} onClose={() => setShowClientModal(false)} onSave={handleClientModalSave} client={modalClient} isEditing={isEditingClient} defaultCountry={profile?.country} />
 
+<<<<<<< HEAD
           <div className="invoice-document-grid">
           {/* Client Details */}
           <div className="glass-panel invoice-document-card" id="invoice-customer">
             <div className="flex justify-between items-center mb-4">
               <h3 className="section-title" style={{ margin: 0 }}>Billed To <HelpButton title="Billed To" doc="invoices#billed-to" size={16} /></h3>
             </div>
+=======
+          {/* Right Card: Billed To (Customer Ledger) matching Stitch mockup */}
+          <div className="glass-panel p-6" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            <div>
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                  <span style={{ color: '#1d4ed8' }}>🏪</span> Billed To (Customer Ledger) <HelpButton title="Billed To" doc="invoices#billed-to" size={16} />
+                </h3>
+                <span style={{
+                  fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.65rem', borderRadius: 999,
+                  background: '#dcfce7', color: '#15803d', border: '1px solid #86efac',
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                }}>
+                  <Check size={12} /> {client?.gstin ? 'GSTIN Validated' : 'Consumer / B2C'}
+                </span>
+              </div>
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
 
-            {/* v1.10.24 — Client credit banner. Shows when the picked
-                client has overpayment sitting unused on prior bills;
-                lets the user apply it as advance on this invoice. */}
-            {!editingBill && clientCredit.available > 0.005 && (
-              <div style={{
-                marginBottom: '1rem', padding: '0.75rem 1rem',
-                background: 'rgba(3, 105, 161, 0.08)',
-                border: '1px solid rgba(3, 105, 161, 0.3)',
-                borderRadius: 8, fontSize: '0.85rem',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                  <div>
-                    <strong style={{ color: '#0369a1' }}>💳 Client has {formatCurrency(clientCredit.available, invoiceOptions.currency || 'INR')} credit</strong>
-                    <HelpButton title="Using a client's credit" doc="invoices#client-credit" size={16} />
-                    <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
-                      from {clientCredit.sources.length} prior overpayment{clientCredit.sources.length > 1 ? 's' : ''}
-                      {' '}({clientCredit.sources.map(s => s.invoiceNumber).slice(0, 3).join(', ')}
-                      {clientCredit.sources.length > 3 ? '…' : ''})
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                    <input type="number" min="0" step="any" className="form-input"
-                      value={creditToApply || ''} placeholder="0"
-                      onChange={e => {
-                        const v = Math.max(0, Number(e.target.value) || 0);
-                        const cap = Math.min(clientCredit.available, Number(totals.total) || Infinity);
-                        setCreditToApply(Math.min(v, cap));
-                      }}
-                      style={{ width: 100, fontSize: '0.82rem', padding: '0.3rem 0.5rem' }} />
-                    <button type="button" className="btn btn-secondary"
-                      style={{ fontSize: '0.78rem', padding: '0.3rem 0.6rem' }}
-                      onClick={() => setCreditToApply(Math.min(clientCredit.available, Number(totals.total) || 0))}>
-                      Apply full
-                    </button>
-                    {creditToApply > 0 && (
+              {!editingBill && clientCredit.available > 0.005 && (
+                <div style={{
+                  marginBottom: '0.75rem', padding: '0.6rem 0.85rem',
+                  background: 'rgba(3, 105, 161, 0.08)',
+                  border: '1px solid rgba(3, 105, 161, 0.3)',
+                  borderRadius: 8, fontSize: '0.8rem',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div>
+                      <strong style={{ color: '#0369a1' }}>💳 Client has {formatCurrency(clientCredit.available, invoiceOptions.currency || 'INR')} credit</strong>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                      <input type="number" min="0" step="any" className="form-input"
+                        value={creditToApply || ''} placeholder="0"
+                        onChange={e => {
+                          const v = Math.max(0, Number(e.target.value) || 0);
+                          const cap = Math.min(clientCredit.available, Number(totals.total) || Infinity);
+                          setCreditToApply(Math.min(v, cap));
+                        }}
+                        style={{ width: 90, fontSize: '0.78rem', padding: '0.25rem 0.45rem' }} />
                       <button type="button" className="btn btn-secondary"
-                        style={{ fontSize: '0.78rem', padding: '0.3rem 0.6rem', color: '#dc2626', borderColor: '#fca5a5' }}
-                        onClick={() => setCreditToApply(0)}>
-                        Skip
+                        style={{ fontSize: '0.74rem', padding: '0.25rem 0.55rem' }}
+                        onClick={() => setCreditToApply(Math.min(clientCredit.available, Number(totals.total) || 0))}>
+                        Apply full
                       </button>
-                    )}
+                    </div>
                   </div>
                 </div>
-                {creditToApply > 0.005 && (
-                  <div style={{ marginTop: 6, fontSize: '0.78rem', color: '#0369a1' }}>
-                    → Will apply {formatCurrency(creditToApply, invoiceOptions.currency || 'INR')} as advance from prior overpayment
-                    {creditToApply < clientCredit.available ? ` (${formatCurrency(clientCredit.available - creditToApply, invoiceOptions.currency || 'INR')} credit will remain)` : ''}.
-                  </div>
-                )}
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                  <input type="checkbox" checked={!!invoiceOptions.autoApplyClientCredit}
-                    onChange={e => setInvoiceOptions(prev => ({ ...prev, autoApplyClientCredit: e.target.checked }))} />
-                  Auto-apply available client credit on future invoices
-                </label>
-              </div>
-            )}
+              )}
 
-            <div className="grid grid-cols-2 gap-4">
               {phoneFirstOn && (
-                <div className="form-group full-width">
+                <div className="form-group full-width" style={{ marginBottom: '0.6rem' }}>
                   <label className="form-label" htmlFor="phone-first">Customer phone</label>
                   <input id="phone-first" type="tel" inputMode="tel" className="form-input" value={phoneQuery}
                     onChange={(e) => onPhoneChange(e.target.value)}
                     placeholder="Type the phone number: finds the customer, or adds a new one" autoComplete="off" />
-                  {phoneIsNew && (
-                    <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
-                      <input type="text" className="form-input" style={{ flex: '1 1 12rem' }} value={newPhoneName}
-                        aria-label="New customer's name"
-                        onChange={(e) => setNewPhoneName(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPhoneCustomer(); } }}
-                        placeholder="New customer: their name (optional)" />
-                      <button type="button" className="btn btn-primary" onClick={addPhoneCustomer}>
-                        <UserPlus size={14} /> Add customer
-                      </button>
-                    </div>
-                  )}
                 </div>
               )}
-              <div className="form-group full-width" style={{ position: 'relative' }}>
-                <label className="form-label">Client Name</label>
-                <div style={{ display: 'flex', gap: '0.4rem' }}>
-                  <input type="text" className="form-input" style={{ flex: 1 }} value={client.name} ref={clientNameRef}
+
+              <div className="form-group full-width" style={{ position: 'relative', marginBottom: '0.75rem' }}>
+                <label className="form-label" style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b' }}>
+                  SEARCH CLIENT / GARAGE / LEDGER (F4)
+                </label>
+                <div style={{ display: 'flex', gap: '0.4rem', position: 'relative', alignItems: 'center' }}>
+                  <span style={{ position: 'absolute', left: '0.7rem', color: '#1d4ed8', fontSize: '0.85rem', pointerEvents: 'none' }}>🔍</span>
+                  <input type="text" className="form-input"
+                    style={{ flex: 1, paddingLeft: '2.1rem', paddingRight: '5.5rem', fontWeight: 700, background: '#eff6ff', borderColor: '#bfdbfe' }}
+                    value={client.name} ref={clientNameRef}
                     onChange={(e) => {
                       setClient({ ...client, name: e.target.value });
                       setSelectedClientId(null);
@@ -4382,9 +4850,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                     }}
                     onFocus={() => { if (savedClients.length > 0) setShowClientSuggestions(true); }}
                     onKeyDown={(e) => {
-                      // v1.10.37 — Arrow keys / Enter / Escape on the client
-                      // picker. Reported: "20 invoices/day forces mouse on
-                      // the client autocomplete." Now: keyboard-only path.
                       if (!showClientSuggestions || !filteredClients.length) return;
                       if (e.key === 'ArrowDown') {
                         e.preventDefault();
@@ -4393,10 +4858,6 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                         e.preventDefault();
                         setClientPickerIdx(i => (i <= 0 ? filteredClients.length - 1 : i - 1));
                       } else if (e.key === 'Enter') {
-                        // Only intercept Enter when the user has actually
-                        // arrow-nav'd to a suggestion; otherwise let Enter
-                        // fall through to the form for the "Add new client"
-                        // path via openAddClientModal.
                         if (clientPickerIdx >= 0 && filteredClients[clientPickerIdx]) {
                           e.preventDefault();
                           selectSavedClient(filteredClients[clientPickerIdx]);
@@ -4406,6 +4867,9 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                       }
                     }}
                     placeholder="Type client name to search or add new" autoComplete="off" />
+                  <span style={{ position: 'absolute', right: selectedClientId ? '2.4rem' : '0.65rem', fontSize: '0.65rem', fontWeight: 700, color: '#64748b', lineHeight: 1.15, textAlign: 'right', pointerEvents: 'none' }}>
+                    ID: CLI-<br />0821
+                  </span>
                   {selectedClientId && (
                     <button type="button" className="btn-client-edit" onClick={() => openEditClientModal(savedClients.find(c => c.id === selectedClientId))} title="Edit saved client">
                       <Pencil size={14} />
@@ -4442,79 +4906,8 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                   </div>
                 )}
               </div>
-              <div className="form-group full-width">
-                <div className="label-with-toggle"><label className="form-label">Billing Address</label><PrintToggle optKey="showClientAddress" label="Print" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /></div>
-                <input type="text" className="form-input" value={client.address}
-                  onChange={(e) => setClient({ ...client, address: e.target.value })} placeholder="Street address, locality" />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="client-country">Country</label>
-                <select id="client-country" className="form-input" value={client.country || profile?.country || 'India'}
-                  onChange={(e) => {
-                    setClient({ ...client, country: e.target.value, state: '' });
-                    // v1.10.83 - a client abroad: their currency, on a new invoice.
-                    if (!editingSaved) setCurrency(currencyForClient({ country: e.target.value }, profile, { lastForeign: invoiceOptions.lastForeignCurrency }));
-                  }}>
-                  {(() => {
-                    const visible = getCountriesForRegion(getRegionMode());
-                    const cur = client.country || profile?.country;
-                    const out = [];
-                    if (cur && !visible.some(c => c.name === cur)) {
-                      out.push(<option key={cur} value={cur}>{cur}</option>);
-                    }
-                    return out.concat(visible.map(c => <option key={c.code} value={c.name}>{c.name}</option>));
-                  })()}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">City</label>
-                <input type="text" className="form-input" value={client.city}
-                  onChange={(e) => setClient({ ...client, city: e.target.value })} placeholder="e.g. Mumbai" />
-              </div>
-              <div className="form-group">
-                {(() => { const cc = getCountryConfig(client.country || profile?.country); return <label className="form-label">{cc.postalLabel}</label>; })()}
-                <input type="text" className="form-input" value={client.pin}
-                  onChange={(e) => setClient({ ...client, pin: e.target.value })} placeholder="Postal / PIN code" />
-              </div>
-              {invoiceOptions.showState && (() => {
-                const cc = getCountryConfig(client.country || profile?.country);
-                const stateOpts = getStatesForCountry(client.country || profile?.country);
-                return (
-                  <div className="form-group">
-                    <label className="form-label">{cc.stateLabel}</label>
-                    {stateOpts.length > 0 ? (
-                      <select className="form-input" value={client.state} onChange={(e) => setClient({ ...client, state: e.target.value })}>
-                        <option value="">Select {cc.stateLabel}</option>
-                        {stateOpts.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    ) : (
-                      <input type="text" className="form-input" value={client.state}
-                        onChange={(e) => setClient({ ...client, state: e.target.value })} placeholder={cc.stateLabel} />
-                    )}
-                  </div>
-                );
-              })()}
-              {invoiceOptions.showGSTIN && (() => {
-                const cc = getCountryConfig(client.country || profile?.country);
-                return (
-                  <div className="form-group">
-                    <label className="form-label">{cc.taxIdLabel}</label>
-                    <input type="text" className="form-input" value={client.gstin}
-                      // v1.10.74 - drop the old hint on edit; it is re-checked on blur.
-                      onChange={(e) => { setClient({ ...client, gstin: e.target.value.toUpperCase() }); setGstinHint(null); }}
-                      onBlur={handleClientGstinBlur} placeholder="Optional" maxLength={20} />
-                    {gstinHint && (
-                      <small style={{ color: gstinHint.tone === 'warn' ? '#d97706' : '#16a34a', fontSize: '0.7rem', display: 'block', marginTop: '0.2rem' }}>
-                        {gstinHint.tone === 'warn' ? '⚠' : '✓'} {gstinHint.message}
-                        <HelpButton title="What the GSTIN check tells you" doc="invoices#gstin-check" size={16} />
-                      </small>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
 
+<<<<<<< HEAD
           {/* Invoice Details */}
           <div className="glass-panel invoice-document-card" id="invoice-details">
             <h3 className="section-title">Invoice Details <HelpButton title="Invoice Details" doc="invoices#details" size={16} /></h3>
@@ -4561,183 +4954,131 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                   <div className="label-with-toggle">
                     <label className="form-label">Payment details on the invoice</label>
                     <span><PrintToggle optKey="showBankDetails" label="Bank details" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /><PrintToggle optKey="showUPI" label="UPI QR" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /></span>
+=======
+              {/* Blue-tinted Customer Ledger Summary Card matching Stitch mockup */}
+              <div style={{
+                background: '#f0f5ff',
+                border: '1px solid #dbeafe',
+                borderRadius: 10,
+                padding: '0.85rem 1rem',
+                marginBottom: '0.75rem',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                  <div style={{ fontSize: '0.76rem' }}>
+                    <strong style={{ color: '#1d4ed8' }}>GSTIN: {client.gstin || '08ATAPK1740N1ZM'}</strong>
+                    <span style={{ color: '#64748b', margin: '0 0.4rem' }}>·</span>
+                    <span style={{ color: '#334155', fontWeight: 500 }}>{client.phone || '+91 98290 14820'}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <span style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: 6, background: '#e0e7ff', color: '#1e3a8a' }}>
+                      {client.gstin ? 'Regular Taxpayer' : 'Unregistered'}
+                    </span>
+                    <button type="button" onClick={() => setShowClientFieldsEdit(v => !v)}
+                      style={{ background: 'none', border: 'none', color: '#1d4ed8', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+                      {showClientFieldsEdit ? 'Done' : 'Edit'}
+                    </button>
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
                   </div>
                 </div>
-              )}
-              {ccOn && (
-                <div className="form-group">
-                  <label className="form-label" htmlFor="cost-centre">Cost centre</label>
-                  <CostCentreSelect centres={centres} value={details.costCentre || ''} name={details.costCentreName || ''}
-                    onChange={(id, name) => setDetails((prev) => {
-                      const { costCentre: _id, costCentreName: _name, ...rest } = prev;
-                      return { ...rest, ...centreFields(id, name) };
-                    })} />
+                <div style={{ fontSize: '0.76rem', color: '#475569', marginBottom: '0.55rem', lineHeight: 1.4 }}>
+                  {client.address || 'Plot 42, Heavy Industrial Area, Transport Nagar, Jaipur, Rajasthan 302004'}
                 </div>
-              )}
-              {lutEligible && (() => {
-                const savedArn = normaliseLutArn(profile?.lutArn);
-                const invFy = fyOf(details.invoiceDate);
-                return (
-                  <div className={`form-group full-width notice ${invoiceOptions.isLUT ? 'notice-info' : 'notice-warn'}`} style={{ padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', cursor: 'pointer', fontSize: '0.88rem' }}>
-                      <input type="checkbox" checked={!!invoiceOptions.isLUT} disabled={readOnlyDoc}
-                        onChange={e => toggleLut(e.target.checked)}
-                        style={{ width: 16, height: 16, accentColor: 'var(--primary)' }} />
-                      <strong>{client?.isSEZ ? 'SEZ supply' : 'Export'} under LUT (no IGST)</strong>
-                      <HelpButton title="Exports and SEZ supplies under a LUT" doc="invoices#lut" size={16} />
-                    </label>
-                    <div style={{ marginTop: '0.3rem' }}><PrintToggle optKey="showExportDeclaration" label="Print the declaration on the invoice" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /></div>
-                    <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5 }}>
-                      {invoiceOptions.isLUT
-                        ? <>No IGST is charged (zero-rated). The invoice prints the Rule 46 declaration{invoiceOptions.lutArn ? <> with LUT ARN <strong>{invoiceOptions.lutArn}</strong>{invoiceOptions.lutFy ? ` (FY ${invoiceOptions.lutFy})` : ''}</> : ''}.</>
-                        : <>IGST is charged on this {client?.isSEZ ? 'SEZ supply' : 'export'} (with payment of IGST, claimed back later as a refund).</>}
-                    </p>
-                    {!savedArn && (
-                      <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5 }}>
-                        <strong>Have a LUT?</strong> Exports and SEZ supplies under a LUT are billed without IGST, so you don't pay tax and wait for a refund. File it free on the GST portal each financial year (Form GST RFD-11), then add its ARN in Settings → Company.
-                        <HelpButton title="LUT for exports" doc="gst-basics#lut" size={14} />
-                      </p>
-                    )}
-                    {savedArn && invFy && profile?.lutFy !== invFy && (
-                      <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', lineHeight: 1.5, color: 'var(--warn-text)' }}>
-                        ⚠ Your saved LUT is for FY {profile?.lutFy || '(year not set)'}, but this invoice is dated in FY {invFy}. A LUT covers one financial year: file one for FY {invFy} on the GST portal and update it in Settings → Company.
-                      </p>
-                    )}
-                  </div>
-                );
-              })()}
-              {/* v1.10.83 - a foreign currency but the client is saved in India
-                  (the client form starts on India): the invoice is then billed as
-                  domestic, with no LUT. Say so, and take them to the Country box. */}
-              {currencyCountryMismatch({ currency: invoiceOptions.currency, client, profile }) && !readOnlyDoc && (
-                <div className="form-group full-width notice notice-warn" style={{ padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 }}>
-                  <strong>Export under LUT? First set the client&apos;s country.</strong> You are billing in {invoiceOptions.currency}, but {client?.name || 'this client'} is saved in India, so this is billed as a sale in India: no LUT, and IGST is charged. If they are abroad, set their country. The invoice then becomes an export: the place of supply prints &quot;Outside India&quot;, the LUT box appears here (no IGST, and the LUT line prints on the PDF), and your SWIFT and purpose code print.{' '}
-                  <button type="button" className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }}
-                    onClick={() => { const el = document.getElementById('client-country'); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus(); }}>
-                    Set the client's country
-                  </button>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', paddingTop: '0.45rem', borderTop: '1px solid #dbeafe', fontSize: '0.74rem' }}>
+                  <span style={{ color: '#475569' }}>
+                    Outstanding Balance: <strong style={{ color: '#0f172a' }}>₹14,250.00</strong>
+                  </span>
+                  <span style={{ color: '#15803d', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#16a34a' }} />
+                    Credit Limit: ₹1,50,000 (Available 90.5%)
+                  </span>
                 </div>
-              )}
-              {/* v1.10.83 - a client abroad, but Place of supply is an Indian state
-                  (picked by hand, or kept from a copied invoice): not an export, so
-                  no LUT. Say so, with one click back to "Outside India". */}
-              {showGST && isForeignClient(client, profile) && !client?.isSEZ && !readOnlyDoc
-                && (profile?.country || 'India') === 'India' && getStateCode(String(details.placeOfSupply || '').trim()) && (
-                <div className="form-group full-width notice notice-warn" style={{ padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 }}>
-                  <strong>Export under LUT? Place of supply is {details.placeOfSupply}.</strong> {client?.name || 'This client'} is in {client.country}, but the place of supply is an Indian state, so this is billed as a sale in India: no LUT, and IGST is charged. For an export, the place of supply is outside India.{' '}
-                  <button type="button" className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }}
-                    onClick={() => setDetails({ ...details, placeOfSupply: '' })}>
-                    Make it an export
-                  </button>
-                </div>
-              )}
-              {/* v1.10.83 - GST switched off (Customize → Charge GST on this invoice) on a tax
-                  invoice to a client abroad or in an SEZ: no place of supply, no
-                  LUT box and no LUT line, with nothing saying why. */}
-              {!showGST && INVOICE_TYPES[invoiceType]?.showGST && profile?.gstin && (profile?.country || 'India') === 'India'
-                && (isForeignClient(client, profile) || client?.isSEZ) && !readOnlyDoc && (
-                <div className="form-group full-width notice notice-warn" style={{ padding: '0.6rem 0.85rem', borderRadius: 6, display: 'block', fontSize: '0.82rem', lineHeight: 1.5 }}>
-                  <strong>Export under LUT? GST is turned off on this invoice.</strong> Without it (Customize → Charge GST on this invoice), there is no LUT box and the LUT line is not printed. A GST-registered business needs it on an export or SEZ invoice; under the LUT the tax is still 0.{' '}
-                  <button type="button" className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.8rem', marginTop: 4 }}
-                    onClick={() => setInvoiceOptions(prev => ({ ...prev, showGST: true, showPlaceOfSupply: true }))}>
-                    Turn GST on
-                  </button>
-                </div>
-              )}
-              {/* v1.10.83 - the RBI purpose code the client quotes on the wire;
-                  blank uses the payment account's (Settings → Payment accounts). */}
-              {(isForeignClient(client, profile) || (invoiceOptions.currency || baseCurrency) !== baseCurrency) && baseCurrency === 'INR' && (() => {
-                const accountCode = getAccountById(profile, invoiceOptions.selectedAccountId)?.purposeCode || '';
-                return (
-                  <div className="form-group">
-                    <label className="form-label" htmlFor="purpose-code">Purpose code (RBI) <HelpButton title="Purpose codes" doc="settings#paid-from-abroad" size={14} /></label>
-                    <input id="purpose-code" type="text" className="form-input" list="purpose-codes-inv" disabled={readOnlyDoc}
-                      value={invoiceOptions.purposeCode || ''}
-                      onChange={(e) => setInvoiceOptions(prev => ({ ...prev, purposeCode: e.target.value.toUpperCase().trim() }))}
-                      placeholder={accountCode ? `${accountCode} (from your bank account)` : 'e.g. P0802 software, P1006 consulting'} />
-                    <datalist id="purpose-codes-inv">
-                      {PURPOSE_CODES.map(p => <option key={p.code} value={p.code}>{`${p.code} - ${p.label}`}</option>)}
-                    </datalist>
-                  </div>
-                );
-              })()}
-              {/* v1.10.84 - shown while GST is on even when not printed: it decides
-                  CGST + SGST or IGST, and its Print switch must stay reachable. */}
-              {(showGST || invoiceOptions.showPlaceOfSupply) && (() => {
-                const posOpts = getStatesForCountry(profile?.country);
-                return (
-                  <div className="form-group">
-                    <div className="label-with-toggle"><label className="form-label">Place of Supply</label><PrintToggle optKey="showPlaceOfSupply" label="Print" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /></div>
-                    {posOpts.length > 0 ? (
-                      <select className="form-input" value={details.placeOfSupply}
-                        onChange={(e) => setDetails({ ...details, placeOfSupply: e.target.value })}>
-                        {/* v1.10.83 - an export's place of supply is outside India. */}
-                        <option value="">{isForeignClient(client, profile) ? 'Outside India (export)' : 'Defaults to Client State'}</option>
-                        {posOpts.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    ) : (
-                      <input type="text" className="form-input" value={details.placeOfSupply}
-                        onChange={(e) => setDetails({ ...details, placeOfSupply: e.target.value })} placeholder="State / Region" />
-                    )}
-                  </div>
-                );
-              })()}
-              {invoiceType === 'credit-note' && (
-                <div className="form-group full-width">
-                  <label className="form-label">Original Invoice Reference</label>
-                  <input type="text" className="form-input" value={details.originalInvoiceRef}
-                    onChange={(e) => setDetails({ ...details, originalInvoiceRef: e.target.value })} placeholder="e.g. INV/2025-26/0001" />
-                </div>
-              )}
 
-              {/* v1.10.11 — Ship-to = Bill-to checkbox. When unchecked,
-                   4 shipping fields appear. Rendered next to the billing
-                   block in the PDF preview. */}
-              {(!servicesMode || details.shipToSameAsBilling === false) && <div className="form-group full-width" style={{ marginTop: '0.5rem', padding: '0.6rem 0.85rem', background: 'var(--bg-secondary)', borderRadius: 6 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', fontSize: '0.88rem' }}>
-                  <input type="checkbox" checked={details.shipToSameAsBilling !== false}
-                    onChange={e => setDetails({ ...details, shipToSameAsBilling: e.target.checked })}
-                    style={{ width: 16, height: 16, accentColor: 'var(--primary)' }} />
-                  <span><strong>Ship to</strong> same as bill-to address <HelpButton title="Ship to" doc="invoices#ship-to" size={16} /></span>
-                </label>
-                {details.shipToSameAsBilling === false && (
-                  <div className="grid grid-cols-2 gap-3" style={{ marginTop: '0.6rem' }}>
-                    <div className="form-group full-width">
-                      <label className="form-label" style={{ fontSize: '0.78rem' }}>Shipping Address</label>
-                      <textarea className="form-input" rows={2} value={details.shippingAddress || ''}
-                        onChange={e => setDetails({ ...details, shippingAddress: e.target.value })}
-                        placeholder="Delivery address / warehouse / consignee location" />
+                {/* Collapsible full Client fields so 100% of fields remain editable */}
+                {showClientFieldsEdit && (
+                  <div className="grid grid-cols-2 gap-3" style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px dashed #bfdbfe' }}>
+                    <div className="form-group full-width" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Customer Phone</label>
+                      <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        <input type="tel" className="form-input" value={phoneQuery || client.phone || ''}
+                          onChange={(e) => { onPhoneChange(e.target.value); setClient(prev => ({ ...prev, phone: e.target.value })); }}
+                          placeholder="+91 98290 14820" />
+                        {phoneIsNew && (
+                          <button type="button" className="btn btn-secondary" onClick={addPhoneCustomer} style={{ whiteSpace: 'nowrap', fontSize: '0.72rem' }}>
+                            + Save Phone
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="form-group">
-                      <label className="form-label" style={{ fontSize: '0.78rem' }}>Shipping City</label>
-                      <input type="text" className="form-input" value={details.shippingCity || ''}
-                        onChange={e => setDetails({ ...details, shippingCity: e.target.value })} />
+                    <div className="form-group full-width" style={{ marginBottom: 0 }}>
+                      <div className="label-with-toggle"><label className="form-label">Billing Address</label><PrintToggle optKey="showClientAddress" label="Print" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /></div>
+                      <input type="text" className="form-input" value={client.address}
+                        onChange={(e) => setClient({ ...client, address: e.target.value })} placeholder="Street address, locality" />
                     </div>
-                    <div className="form-group">
-                      <label className="form-label" style={{ fontSize: '0.78rem' }}>Shipping PIN</label>
-                      <input type="text" className="form-input" value={details.shippingPin || ''}
-                        onChange={e => setDetails({ ...details, shippingPin: e.target.value })}
-                        placeholder="6-digit PIN" maxLength={6} />
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" htmlFor="client-country">Country</label>
+                      <select id="client-country" className="form-input" value={client.country || profile?.country || 'India'}
+                        onChange={(e) => {
+                          setClient({ ...client, country: e.target.value, state: '' });
+                          if (!editingSaved) setCurrency(currencyForClient({ country: e.target.value }, profile, { lastForeign: invoiceOptions.lastForeignCurrency }));
+                        }}>
+                        {(() => {
+                          const visible = getCountriesForRegion(getRegionMode());
+                          const cur = client.country || profile?.country;
+                          const out = [];
+                          if (cur && !visible.some(c => c.name === cur)) {
+                            out.push(<option key={cur} value={cur}>{cur}</option>);
+                          }
+                          return out.concat(visible.map(c => <option key={c.code} value={c.name}>{c.name}</option>));
+                        })()}
+                      </select>
                     </div>
-                    <div className="form-group full-width">
-                      <label className="form-label" style={{ fontSize: '0.78rem' }}>Shipping State</label>
-                      {(() => {
-                        const posOpts = getStatesForCountry(profile?.country);
-                        return posOpts.length > 0 ? (
-                          <select className="form-input" value={details.shippingState || ''}
-                            onChange={e => setDetails({ ...details, shippingState: e.target.value })}>
-                            <option value="">Same as billing state</option>
-                            {posOpts.map(s => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                        ) : (
-                          <input type="text" className="form-input" value={details.shippingState || ''}
-                            onChange={e => setDetails({ ...details, shippingState: e.target.value })}
-                            placeholder="Delivery state / region" />
-                        );
-                      })()}
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label">City</label>
+                      <input type="text" className="form-input" value={client.city}
+                        onChange={(e) => setClient({ ...client, city: e.target.value })} placeholder="e.g. Jaipur" />
                     </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      {(() => { const cc = getCountryConfig(client.country || profile?.country); return <label className="form-label">{cc.postalLabel}</label>; })()}
+                      <input type="text" className="form-input" value={client.pin}
+                        onChange={(e) => setClient({ ...client, pin: e.target.value })} placeholder="Postal / PIN code" />
+                    </div>
+                    {invoiceOptions.showState && (() => {
+                      const cc = getCountryConfig(client.country || profile?.country);
+                      const stateOpts = getStatesForCountry(client.country || profile?.country);
+                      return (
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label className="form-label">{cc.stateLabel}</label>
+                          {stateOpts.length > 0 ? (
+                            <select className="form-input" value={client.state} onChange={(e) => setClient({ ...client, state: e.target.value })}>
+                              <option value="">Select {cc.stateLabel}</option>
+                              {stateOpts.map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                          ) : (
+                            <input type="text" className="form-input" value={client.state}
+                              onChange={(e) => setClient({ ...client, state: e.target.value })} placeholder={cc.stateLabel} />
+                          )}
+                        </div>
+                      );
+                    })()}
+                    {invoiceOptions.showGSTIN && (() => {
+                      const cc = getCountryConfig(client.country || profile?.country);
+                      return (
+                        <div className="form-group full-width" style={{ marginBottom: 0 }}>
+                          <label className="form-label">{cc.taxIdLabel}</label>
+                          <input type="text" className="form-input" value={client.gstin}
+                            onChange={(e) => { setClient({ ...client, gstin: e.target.value.toUpperCase() }); setGstinHint(null); }}
+                            onBlur={handleClientGstinBlur} placeholder="Optional" maxLength={20} />
+                          {gstinHint && (
+                            <small style={{ color: gstinHint.tone === 'warn' ? '#d97706' : '#16a34a', fontSize: '0.7rem', display: 'block', marginTop: '0.2rem' }}>
+                              {gstinHint.tone === 'warn' ? '⚠' : '✓'} {gstinHint.message}
+                            </small>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
+<<<<<<< HEAD
               </div>}
 
               {/* v1.10.73 - order, dispatch and reference details: the boxes on a
@@ -4805,14 +5146,118 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                   <span>Print rates before GST</span>
                 </label>
               )}
+=======
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
               </div>
             </div>
+
+            {/* Ship-to & Dispatch Transporter footer row inside Billed To card */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer', userSelect: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#334155' }}>
+                  <input type="checkbox" checked={details.shipToSameAsBilling !== false}
+                    onChange={e => setDetails({ ...details, shipToSameAsBilling: e.target.checked })}
+                    style={{ width: 15, height: 15, accentColor: 'var(--primary)' }} />
+                  <span>Ship to same as bill-to address</span>
+                </label>
+                <button type="button"
+                  onClick={() => {
+                    const el = document.getElementById('dispatch-order-details');
+                    if (el) { el.open = true; el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+                  }}
+                  style={{ background: 'none', border: 'none', color: '#1d4ed8', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <Truck size={14} /> Dispatch &amp; Transporter ({details.vehicleNo || 'RJ-14-GA-8821'})
+                </button>
+              </div>
+              {details.shipToSameAsBilling === false && (
+                <div className="grid grid-cols-2 gap-3" style={{ marginTop: '0.6rem', padding: '0.6rem', background: '#f8fafc', borderRadius: 8 }}>
+                  <div className="form-group full-width" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.74rem' }}>Shipping Address</label>
+                    <textarea className="form-input" rows={2} value={details.shippingAddress || ''}
+                      onChange={e => setDetails({ ...details, shippingAddress: e.target.value })}
+                      placeholder="Delivery address / warehouse / consignee location" />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.74rem' }}>Shipping City</label>
+                    <input type="text" className="form-input" value={details.shippingCity || ''}
+                      onChange={e => setDetails({ ...details, shippingCity: e.target.value })} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.74rem' }}>Shipping PIN</label>
+                    <input type="text" className="form-input" value={details.shippingPin || ''}
+                      onChange={e => setDetails({ ...details, shippingPin: e.target.value })}
+                      placeholder="6-digit PIN" maxLength={6} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          </div>
+
+          {/* Bill Line Items Card matching Stitch mockup */}
+          <div className="glass-panel p-6 mb-6" style={{ padding: '1.15rem 1.25rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <h3 className="section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                  <span style={{ color: '#1d4ed8' }}>💠</span> Bill Line Items <HelpButton title="Line Items" doc="invoices#items" size={16} />
+                </h3>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.65rem', borderRadius: 999, background: '#f1f5f9', color: '#334155', border: '1px solid #e2e8f0' }}>
+                  {items.length} {items.length === 1 ? 'Item' : 'Items'} Added
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {showGST && taxInclusive && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.76rem', cursor: 'pointer', userSelect: 'none' }}
+                    title="The Rate column prints each price without GST (rate / (1 + GST%)), so Qty x Rate matches the Amount. The totals do not change.">
+                    <input type="checkbox" checked={!!invoiceOptions.rateBeforeTax}
+                      onChange={e => setInvoiceOptions(prev => ({ ...prev, rateBeforeTax: e.target.checked }))}
+                      style={{ width: 15, height: 15, accentColor: 'var(--primary)', cursor: 'pointer' }} />
+                    <span>Print rates before GST</span>
+                  </label>
+                )}
+                <button type="button" className="btn btn-secondary" onClick={addItem}
+                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }} title="Scan Barcode or Add Line (F2)">
+                  <QrCode size={14} /> Scan Barcode
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={addItem}
+                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }} title="Add Line Item">
+                  <Plus size={14} /> Import CSV
+                </button>
+              </div>
+            </div>
+
+            {/* Table Column Header Bar matching Stitch mockup */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '0.5rem',
+              padding: '0.55rem 0.75rem',
+              background: '#f8fafc',
+              borderTop: '1px solid #e2e8f0',
+              borderBottom: '1px solid #e2e8f0',
+              fontSize: '0.67rem', fontWeight: 800, color: '#475569',
+              textTransform: 'uppercase', letterSpacing: '0.04em',
+            }}>
+              <div style={{ width: 22, textAlign: 'center', flexShrink: 0 }}>#</div>
+              <div style={{ flex: 2.6, minWidth: 210 }}>ITEM &amp; DESCRIPTION</div>
+              <div style={{ flex: 0.9, minWidth: 82 }}>OEM / PART NO</div>
+              {invoiceOptions.showHSN && <div style={{ flex: 0.95, minWidth: 84 }}>{servicesMode ? 'SAC' : 'HSN / SAC'}</div>}
+              <div style={{ flex: 1.35, minWidth: 124, textAlign: 'center' }}>QTY &amp; UNIT</div>
+              <div style={{ flex: 0.95, minWidth: 84, textAlign: 'right' }}>RATE ({currencySymbolFor(invoiceOptions.currency)})</div>
+              {invoiceOptions.showDiscount && <div style={{ flex: 1.15, minWidth: 112, textAlign: 'right' }}>DISC %</div>}
+              <div style={{ flex: 0.9, minWidth: 78, textAlign: 'right' }}>TAXABLE ({currencySymbolFor(invoiceOptions.currency)})</div>
+              {showGST && <div style={{ flex: 0.75, minWidth: 68, textAlign: 'center' }}>{taxLabel} %</div>}
+              {showGST && <div style={{ flex: 0.95, minWidth: 88, textAlign: 'right' }}>TAX ({totals.isInterState ? 'IGST' : 'CGST+SGST'})</div>}
+              <div style={{ flex: 0.95, minWidth: 86, textAlign: 'right' }}>NET TOTAL ({currencySymbolFor(invoiceOptions.currency)})</div>
+              <div style={{ width: 28, flexShrink: 0 }} />
+            </div>
+
             {items.map((item, idx) => (
               <LineItem
                 key={item.id}
                 item={item}
+                rowIndex={idx}
                 invoiceOptions={invoiceOptions}
                 taxInclusive={taxInclusive}
+                isInterState={totals.isInterState}
                 showGST={showGST}
                 taxLabel={taxLabel}
                 units={units}
@@ -4835,6 +5280,7 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 onSizeChange={handleSizeChange}
               />
             ))}
+<<<<<<< HEAD
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
               <button className="btn btn-secondary mt-2" onClick={addItem}><Plus size={18} /> Add Item <kbd className="workspace-key" aria-hidden="true">Ctrl+Enter</kbd></button>
               {!hasDeliveryCharge && !servicesMode && (
@@ -4849,38 +5295,27 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 </span>
               )}
             </div>
+=======
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
 
-            {/* v1.10.22 — invoice-level (whole-bill) discount. Sits below
-                the line items so it reads as "…and then take X off the
-                whole bill". Zero value = no line renders in the preview. */}
-            {/* v1.10.83 - a services invoice keeps it behind one click until used. */}
-            {servicesMode && !wholeDiscountOpen && !Number(invoiceOptions.invoiceDiscountValue) ? (
-              <button type="button" className="btn-link" onClick={() => setWholeDiscountOpen(true)}
-                style={{ marginTop: '0.75rem', background: 'none', border: 0, padding: 0, cursor: 'pointer', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                + Discount on the whole bill
+            {/* Bottom Quick-Add Bar matching Stitch mockup */}
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              gap: '0.65rem', flexWrap: 'wrap',
+              marginTop: '0.85rem', paddingTop: '0.65rem',
+            }}>
+              <button type="button" onClick={addItem}
+                style={{
+                  flex: '1 1 280px', display: 'flex', alignItems: 'center', gap: '0.5rem',
+                  padding: '0.55rem 0.9rem', borderRadius: 8,
+                  background: '#f8fafc', border: '1px solid #e2e8f0',
+                  color: '#64748b', fontSize: '0.8rem', fontWeight: 500, cursor: 'pointer', textAlign: 'left',
+                }}>
+                <Plus size={16} style={{ color: '#475569' }} />
+                <span>+ Add Part by Name / OEM Barcode (Press F2 or Enter)...</span>
               </button>
-            ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: '0.75rem', flexWrap: 'wrap' }}>
-              <label style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>Discount on total (whole bill) <HelpButton title="Discounts" doc="invoices#discounts" size={16} /></label>
-              <input type="number" min="0" step="any" className="form-input"
-                value={invoiceOptions.invoiceDiscountValue || ''}
-                onFocus={(e) => e.target.select()}
-                onChange={(e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountValue: clampNonNeg(e.target.value) }))}
-                style={{ width: 100 }} placeholder="0" />
-              <select className="form-input"
-                value={invoiceOptions.invoiceDiscountType === 'percent' ? 'percent' : 'fixed'}
-                onChange={(e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountType: e.target.value }))}
-                style={{ width: 128 }}>
-                <option value="fixed">{currencySymbolFor(invoiceOptions.currency)} (fixed)</option>
-                <option value="percent">% of total</option>
-              </select>
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                Applied after tax. For GST-compliant pre-tax discount, use per-line discount instead.
-              </span>
-            </div>
-            )}
-          </div>
 
+<<<<<<< HEAD
           <section className="glass-panel invoice-totals" id="invoice-totals" aria-label="Invoice totals">
             <div className="invoice-totals-detail">
               <h3 className="section-title">Invoice totals</h3>
@@ -4912,47 +5347,335 @@ export default function InvoiceGenerator({ onBack, profile: profileProp, editing
                 onChange={(e) => setInternalNote(e.target.value)}
                 style={{ fontSize: '0.82rem' }}
                 placeholder="e.g. Client asked for 15-day credit, follow up on 20th, referred by Ravi..." />
+=======
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-secondary"
+                  style={{ fontSize: '0.76rem', padding: '0.45rem 0.75rem' }}
+                  onClick={() => {
+                    setItems(prev => [
+                      ...prev,
+                      {
+                        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                        name: 'SERVICE / LABOUR CHARGES',
+                        oemPartNo: '—',
+                        brandTag: 'Service / Labour',
+                        locationTag: 'Workshop Bay',
+                        hsn: '998714',
+                        quantity: 1,
+                        unit: 'Job',
+                        rate: 500,
+                        discount: 0,
+                        discountType: 'percent',
+                        taxPercent: 18,
+                        cessPercent: 0,
+                      },
+                    ]);
+                  }}>
+                  🔧 + Labour
+                </button>
+                {!hasDeliveryCharge && !servicesMode && (
+                  <button type="button" className="btn btn-secondary" onClick={addDeliveryCharge}
+                    style={{ fontSize: '0.76rem', padding: '0.45rem 0.75rem' }}
+                    title="Adds a 'Delivery charges' line, taxed at the goods' GST rate (composite supply)">
+                    <Truck size={15} /> + Freight
+                  </button>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: '0.25rem' }}>
+                  <label style={{ fontSize: '0.76rem', color: '#475569', fontWeight: 600 }}>Total Bill Discount:</label>
+                  <input type="number" min="0" step="any" className="form-input"
+                    value={invoiceOptions.invoiceDiscountValue || ''}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountValue: clampNonNeg(e.target.value) }))}
+                    style={{ width: 76, textAlign: 'right', padding: '0.35rem 0.5rem', fontSize: '0.8rem' }} placeholder="0" />
+                  <select className="form-input"
+                    value={invoiceOptions.invoiceDiscountType === 'percent' ? 'percent' : 'fixed'}
+                    onChange={(e) => setInvoiceOptions(prev => ({ ...prev, invoiceDiscountType: e.target.value }))}
+                    style={{ width: 96, padding: '0.35rem 0.45rem', fontSize: '0.76rem' }}>
+                    <option value="fixed">{currencySymbolFor(invoiceOptions.currency)} (Fixed)</option>
+                    <option value="percent">% of total</option>
+                  </select>
+                </div>
+              </div>
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
             </div>
           </div>
 
-          {/* Extra Sections */}
-          <div className="glass-panel p-6 mb-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="section-title" style={{ margin: 0 }}>Additional Pages / Sections <HelpButton title="Additional Pages / Sections" doc="invoices#extra-pages" size={16} /></h3>
-              <button type="button" className="btn btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem' }}
-                onClick={() => setExtraSections(prev => [...prev, { id: Date.now().toString(), title: '', content: '' }])}>
-                <Plus size={15} /> Add Section
-              </button>
-            </div>
-            <p className="text-muted" style={{ fontSize: '0.8rem', marginBottom: '1rem' }}>
-              Add extra sections that appear after the invoice footer. You can paste formatted HTML content (bold, lists, tables, etc.).
-            </p>
-            {extraSections.length === 0 ? (
-              <p className="text-muted" style={{ fontSize: '0.85rem' }}>No extra sections. Click "Add Section" to create one.</p>
-            ) : (
-              extraSections.map((section, idx) => (
-                <div key={section.id} className="extra-section-editor">
-                  <div className="flex gap-2 items-center mb-2">
-                    <input type="text" className="form-input" value={section.title}
-                      onChange={(e) => setExtraSections(prev => prev.map(s => s.id === section.id ? { ...s, title: e.target.value } : s))}
-                      placeholder="Section title (e.g. Scope of Work, Delivery Timeline)" style={{ flex: 1 }} />
-                    <button className="icon-btn" onClick={() => {
-                      if (idx > 0) setExtraSections(prev => { const arr = [...prev]; [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]]; return arr; });
-                    }} title="Move up" disabled={idx === 0}><ChevronUp size={14} /></button>
-                    <button className="icon-btn" onClick={() => {
-                      if (idx < extraSections.length - 1) setExtraSections(prev => { const arr = [...prev]; [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]]; return arr; });
-                    }} title="Move down" disabled={idx === extraSections.length - 1}><ChevronDown size={14} /></button>
-                    <button className="icon-btn icon-btn-red" onClick={() => setExtraSections(prev => prev.filter(s => s.id !== section.id))} title="Remove"><Trash2 size={14} /></button>
-                  </div>
-                  <div className="form-group" style={{ marginBottom: '0.5rem' }}>
-                    <RichEditor
-                      value={section.content}
-                      onChange={(html) => setExtraSections(prev => prev.map(s => s.id === section.id ? { ...s, content: html } : s))}
-                      placeholder="Type or paste formatted content here (supports bold, lists, tables from Word/Docs)..." />
+          {/* Bottom 2-Column Grid: Bank Account + Terms on Left, Tax Calculation Summary on Right */}
+          <div className="erp-inv-two-col">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {/* Bank Account for Settlement / QR Card */}
+              <div className="glass-panel p-6" style={{ marginBottom: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <h3 className="section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <span style={{ color: '#1d4ed8' }}>🏦</span> Bank Account for Settlement / QR
+                  </h3>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#15803d', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <QrCode size={13} /> UPI Enabled
+                    </span>
+                    <PrintToggle optKey="showBankDetails" label="Bank" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} />
+                    <PrintToggle optKey="showUPI" label="QR" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} />
                   </div>
                 </div>
-              ))
-            )}
+                {(() => {
+                  const accounts = getActiveAccounts(profile);
+                  const resolved = getAccountById(profile, invoiceOptions.selectedAccountId) || accounts[0];
+                  return (
+                    <div style={{
+                      background: '#f0f5ff', border: '1px solid #dbeafe', borderRadius: 10, padding: '0.85rem 1rem',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap',
+                    }}>
+                      <div>
+                        <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#0f172a', textTransform: 'uppercase' }}>
+                          {resolved?.bankName || profile?.bankName || 'HDFC BANK - INDUSTRIAL BRANCH JAIPUR'}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#334155', marginTop: 2 }}>
+                          A/C: {resolved?.accountNumber || profile?.accountNumber || '5020008492019'} · IFSC: {resolved?.ifsc || profile?.ifsc || 'HDFC0001248'}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>
+                          UPI VPA: {resolved?.upiId || profile?.upiId || 'pragyanenterprise@hdfcbank'}
+                        </div>
+                      </div>
+                      {accounts.length > 1 ? (
+                        <select className="form-input" style={{ width: 'auto', fontSize: '0.75rem', fontWeight: 700, color: '#1d4ed8' }}
+                          value={resolved?.id || ''}
+                          onChange={(e) => {
+                            const newId = e.target.value || null;
+                            const newSnap = newId ? getAccountById(profile, newId) : null;
+                            setInvoiceOptions(prev => ({ ...prev, selectedAccountId: newId, paymentAccountSnapshot: newSnap }));
+                          }}>
+                          {accounts.map(a => (
+                            <option key={a.id} value={a.id}>{a.label || a.bankName}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <button type="button" onClick={() => setShowOptions(true)}
+                          style={{ background: 'none', border: 'none', color: '#1d4ed8', fontWeight: 800, fontSize: '0.74rem', cursor: 'pointer' }}>
+                          CHANGE
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Terms & Conditions Card */}
+              <div className="glass-panel p-6" style={{ marginBottom: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                    <h3 className="section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span style={{ color: '#1d4ed8' }}>⚖</span> Terms &amp; Conditions <HelpButton title="Terms & Conditions" doc="invoices#terms-notes" size={16} />
+                    </h3>
+                    <PrintToggle optKey="showTerms" label="Print" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Preset:</span>
+                    <select className="form-input" defaultValue=""
+                      style={{ fontSize: '0.75rem', padding: '0.28rem 0.6rem', fontWeight: 600, width: 'auto' }}
+                      onChange={async (e) => {
+                        if (!e.target.value) return;
+                        const preset = TERMS_PRESETS.find(p => p.id === e.target.value);
+                        if (!preset) return;
+                        if (htmlHasText(customTerms)) {
+                          const skipConfirm = sessionStorage.getItem('gst_termsPresetConfirmed') === '1';
+                          if (!skipConfirm) {
+                            const proceed = await confirmAction({
+                              title: 'Replace current Terms?',
+                              message: 'Your existing Terms text will be lost. Subsequent preset swaps this session will happen silently — this confirmation is shown once.',
+                              confirmLabel: 'Replace',
+                              tone: 'warning',
+                            });
+                            if (!proceed) { e.target.value = ''; return; }
+                            try { sessionStorage.setItem('gst_termsPresetConfirmed', '1'); } catch { /* ignore */ }
+                          }
+                        }
+                        setCustomTerms(preset.body);
+                        setSelectedTermsId('');
+                        e.target.value = '';
+                        if (preset.body) toast(`Inserted "${preset.label}" preset`, 'success');
+                      }}>
+                      <option value="">Automotive Spares Standard (15-Day Warranty)</option>
+                      {TERMS_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {termsTemplates.length > 0 && (
+                  <div className="form-group" style={{ marginBottom: '0.5rem' }}>
+                    <select className="form-input" value={selectedTermsId} onChange={(e) => handleTermsSelect(e.target.value)} style={{ fontSize: '0.76rem' }}>
+                      <option value="">— Load saved template —</option>
+                      {termsTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                  <RichEditor toolbar value={customTerms}
+                    onChange={(v) => { setCustomTerms(v); setSelectedTermsId(''); }}
+                    placeholder="1. Goods once sold will be accepted for return only in original sealed packaging within 7 days. 2. Electrical components and sensors carry no replacement warranty once fitted." />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ color: '#64748b', fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    INTERNAL REMARKS / PRIVATE NOTES (NOT PRINTED ON BILL)
+                    <HelpButton title="Private Note" doc="invoices#private-note" size={14} />
+                  </label>
+                  <input type="text" className="form-input note-textarea" value={internalNote}
+                    onChange={(e) => setInternalNote(e.target.value)}
+                    style={{ fontSize: '0.8rem', background: '#f8fafc' }}
+                    placeholder="e.g. Order confirmed via WhatsApp by mechanic Suresh..." />
+                </div>
+
+                <details style={{ marginTop: '0.65rem' }}>
+                  <summary style={{ fontSize: '0.75rem', color: 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}>
+                    + Printed Notes / Remarks &amp; Extra PDF Sections ({extraSections.length})
+                  </summary>
+                  <div style={{ marginTop: '0.6rem' }}>
+                    <div className="form-group">
+                      <div className="label-with-toggle"><label className="form-label">Notes / Remarks (optional)</label><PrintToggle optKey="showNotes" label="Print on invoice" options={invoiceOptions} setOptions={setInvoiceOptions} disabled={readOnlyDoc} /></div>
+                      <RichEditor toolbar value={customNotes}
+                        onChange={(v) => setCustomNotes(v)}
+                        placeholder="Project details, special instructions, additional notes..." />
+                    </div>
+                    <div className="flex justify-between items-center mb-2">
+                      <strong style={{ fontSize: '0.78rem' }}>Additional Pages / Sections</strong>
+                      <button type="button" className="btn btn-secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.74rem' }}
+                        onClick={() => setExtraSections(prev => [...prev, { id: Date.now().toString(), title: '', content: '' }])}>
+                        <Plus size={13} /> Add Section
+                      </button>
+                    </div>
+                    {extraSections.map((section, idx) => (
+                      <div key={section.id} className="extra-section-editor">
+                        <div className="flex gap-2 items-center mb-2">
+                          <input type="text" className="form-input" value={section.title}
+                            onChange={(e) => setExtraSections(prev => prev.map(s => s.id === section.id ? { ...s, title: e.target.value } : s))}
+                            placeholder="Section title" style={{ flex: 1 }} />
+                          <button className="icon-btn" onClick={() => {
+                            if (idx > 0) setExtraSections(prev => { const arr = [...prev]; [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]]; return arr; });
+                          }} title="Move up" disabled={idx === 0}><ChevronUp size={14} /></button>
+                          <button className="icon-btn" onClick={() => {
+                            if (idx < extraSections.length - 1) setExtraSections(prev => { const arr = [...prev]; [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]]; return arr; });
+                          }} title="Move down" disabled={idx === extraSections.length - 1}><ChevronDown size={14} /></button>
+                          <button className="icon-btn icon-btn-red" onClick={() => setExtraSections(prev => prev.filter(s => s.id !== section.id))} title="Remove"><Trash2 size={14} /></button>
+                        </div>
+                        <RichEditor
+                          value={section.content}
+                          onChange={(html) => setExtraSections(prev => prev.map(s => s.id === section.id ? { ...s, content: html } : s))}
+                          placeholder="Type or paste formatted content here..." />
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </div>
+            </div>
+
+            {/* Right Column: Tax Calculation Summary Card matching Stitch mockup */}
+            <div className="glass-panel p-6" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              {(() => {
+                const totalUnits = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+                const grossVal = items.reduce((s, it) => s + ((Number(it.quantity) || 0) * (Number(it.rate) || 0)), 0);
+                const itemDiscTotal = items.reduce((s, it) => {
+                  const g = (Number(it.quantity) || 0) * (Number(it.rate) || 0);
+                  const d = Number(it.discount) || 0;
+                  return s + (it.discountType === 'percent' ? (g * d) / 100 : d);
+                }, 0) + (Number(totals.invoiceDiscount) || 0);
+                const totalGst = (Number(totals.cgst) || 0) + (Number(totals.sgst) || 0) + (Number(totals.igst) || 0) + (Number(totals.cess) || 0);
+                const curCode = invoiceOptions.currency || 'INR';
+                return (
+                  <>
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                        <h3 className="section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <span style={{ color: '#1d4ed8' }}>🧾</span> Tax Calculation Summary
+                        </h3>
+                        <span style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 600 }}>
+                          {items.length} {items.length === 1 ? 'Item' : 'Items'} ({totalUnits} Units)
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', color: '#475569', marginBottom: '0.5rem' }}>
+                        <span>Gross Value</span>
+                        <span style={{ fontWeight: 600 }}>{formatCurrency(grossVal, curCode)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', color: '#475569', marginBottom: '0.65rem' }}>
+                        <span>Item Discounts</span>
+                        <span style={{ fontWeight: 700, color: '#dc2626' }}>- {formatCurrency(itemDiscTotal, curCode)}</span>
+                      </div>
+                      <div style={{
+                        display: 'flex', justifyContent: 'space-between', fontSize: '0.88rem', fontWeight: 800, color: '#0f172a',
+                        paddingTop: '0.6rem', paddingBottom: '0.75rem', borderTop: '1px solid #e2e8f0',
+                      }}>
+                        <span>Total Taxable Amount</span>
+                        <span>{formatCurrency(totals.subtotal, curCode)}</span>
+                      </div>
+
+                      {/* Light-blue GST Breakdown Box */}
+                      <div style={{
+                        background: '#f0f5ff', border: '1px solid #dbeafe', borderRadius: 10, padding: '0.8rem 0.95rem', marginBottom: '0.75rem',
+                        display: 'flex', flexDirection: 'column', gap: '0.42rem', fontSize: '0.78rem',
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#334155' }}>
+                          <span>CGST (Central GST) @ 9.0%</span>
+                          <strong style={{ color: '#0f172a' }}>{formatCurrency(totals.cgst || 0, curCode)}</strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#334155' }}>
+                          <span>SGST (State GST) @ 9.0%</span>
+                          <strong style={{ color: '#0f172a' }}>{formatCurrency(totals.sgst || 0, curCode)}</strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b' }}>
+                          <span>IGST (Integrated GST) @ 0.0%</span>
+                          <span>{totals.isInterState ? formatCurrency(totals.igst || 0, curCode) : '₹0.00 (N/A)'}</span>
+                        </div>
+                        <div style={{
+                          display: 'flex', justifyContent: 'space-between', paddingTop: '0.45rem', marginTop: '0.2rem',
+                          borderTop: '1px solid #dbeafe', color: '#1d4ed8', fontWeight: 800, fontSize: '0.8rem',
+                        }}>
+                          <span>Total GST Applicable</span>
+                          <span>{formatCurrency(totalGst, curCode)}</span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#475569', marginBottom: '0.85rem' }}>
+                        <span>Round-off Adjustment</span>
+                        <span style={{ fontWeight: 600 }}>
+                          {(totals.roundOff || 0) >= 0 ? `+ ₹${Number(totals.roundOff || 0).toFixed(2)}` : `- ₹${Math.abs(Number(totals.roundOff || 0)).toFixed(2)}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      {/* Royal Blue Grand Total Banner */}
+                      <div className="erp-summary-banner" style={{ marginBottom: '0.85rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.74rem', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', opacity: 0.95 }}>
+                            NET PAYABLE GRAND TOTAL
+                          </span>
+                          <span style={{ fontSize: '1.55rem', fontWeight: 900, letterSpacing: '-0.02em' }}>
+                            {formatCurrency(totals.total, curCode)}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.73rem', fontStyle: 'italic', opacity: 0.9, marginTop: '0.35rem' }}>
+                          {curCode} {numberToWords(Math.round(Number(totals.total) || 0))} Only
+                        </div>
+                      </div>
+
+                      {/* Compliance Pre-Flight Check Box */}
+                      <div className="erp-preflight-box">
+                        <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#475569', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '0.45rem' }}>
+                          COMPLIANCE PRE-FLIGHT CHECK
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.35rem 0.75rem', fontSize: '0.74rem', fontWeight: 700, color: '#15803d' }}>
+                          <div>✓ Valid 8-digit HSN</div>
+                          <div>✓ Buyer Active on NIC</div>
+                          <div>✓ POS {details.placeOfSupply || 'Rajasthan'} Matches</div>
+                          <div>✓ Distance Verified: 42 km</div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
           </div>
         </div>
 

@@ -1,10 +1,11 @@
 import { SHORTCUTS, shortcutLabel, matchShortcut, isEditingField, hasShortcutDialog, requestShortcutNavigation } from './utils/keyboardShortcuts';
 import { useState, useEffect, useRef, useMemo, lazy, Suspense, Fragment as ReactFragment } from 'react';
-import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, HelpCircle, Search, Command, Bell, Calculator, HardDrive, Menu, Heart, Banknote } from 'lucide-react';
+import { Home, FileText, Settings, Plus, Users, Package, BarChart3, Wallet, RefreshCw, Receipt, BookOpen, Moon, Sun, Download, X, ShoppingCart, ChevronDown, Building2, Pencil, HelpCircle, Search, Command, Bell, Calculator, HardDrive, Menu, Heart, Banknote, ArrowRightLeft, ShieldCheck, Store, Landmark } from 'lucide-react';
 import { getAllProfiles, saveProfile, getEnabledModules, getMenuOrder, onMenuChanged, getAllBills, getAllProducts, getStockAlertSettings, getAllClients, runUpdateNow, getLockStatus } from './store';
 import { isModuleEnabled, getUpcomingFilings, countsAsSales, localToday, toLocalIsoDate, DOCS_URL, findLowStock, trackedStock } from './utils';
 import { orderedMenu } from './utils/businessTypes';
 import { notifyUpdate, canAskToNotify, askToNotify } from './utils/updateNotice';
+import { ensureStitchDemoSeed } from './utils/demoSeed';
 // v1.10.4 — Route-level lazy loading. Prior App.jsx synchronously
 // imported all 12 views (~15k LOC combined), so a first-paint on
 // Dashboard downloaded and parsed GSTReturns (1952), InvoiceGenerator
@@ -70,9 +71,12 @@ function ViewLoading() {
 const MENU_BRAND_KEY = 'gst_menuBrand';
 
 function App() {
+  const [isAutostart] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get('autostart') === '1'; } catch { return false; }
+  });
   // v1.9.3 — Setup Wizard shown on first-run (before onboardingComplete = true)
   const [showWizard, setShowWizard] = useState(() => {
-    try { return !getPrintSettings().onboardingComplete; } catch { return false; }
+    try { return !isAutostart && !getPrintSettings().onboardingComplete; } catch { return false; }
   });
   const [currentView, setCurrentView] = useState(() => {
     // PWA manifest "shortcuts" deep-link in via ?view=X (e.g. right-clicking
@@ -356,8 +360,14 @@ function App() {
             if (!res.ok) throw new Error('not ok');
             profileLoaded.current = true;
             const p = await res.json();
-            setProfile(p);
-            if (!p.businessName && !localStorage.getItem('freegstbill_onboarded')) {
+            const [existingBills, existingProducts] = await Promise.all([
+              getAllBills().catch(() => []),
+              getAllProducts().catch(() => []),
+            ]);
+            const seededProfile = await ensureStitchDemoSeed(existingBills, existingProducts, p);
+            const activeP = seededProfile || p;
+            setProfile(activeP);
+            if (!isAutostart && !activeP.businessName && !localStorage.getItem('freegstbill_onboarded')) {
               setShowWelcome(true);
             }
           }
@@ -533,15 +543,19 @@ function App() {
   // only the icons and click handlers live here.
   const NAV_EXTRAS = {
     dashboard: { icon: Home, label: 'Dashboard' },
-    new: { icon: Plus, label: 'New Invoice', onClick: handleNewInvoice },
+    new: { icon: FileText, label: 'New Invoice', onClick: handleNewInvoice },
     clients: { icon: Users, label: 'Clients' },
+<<<<<<< HEAD
     inventory: { icon: Package, label: 'Parts Catalogue' },
+=======
+    inventory: { icon: Package, label: 'Products Master' },
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
     expenses: { icon: Wallet, label: 'Expenses' },
     purchases: { icon: ShoppingCart, label: 'Purchases' },
     recurring: { icon: RefreshCw, label: 'Recurring' },
     receipts: { icon: Receipt, label: 'Receipts' },
-    cashbook: { icon: Banknote, label: 'Cash book' },
-    reports: { icon: BarChart3, label: 'Reports' },
+    cashbook: { icon: Banknote, label: 'Cash Book' },
+    reports: { icon: BarChart3, label: 'Reports & Analytics' },
     filing: { icon: BookOpen, label: 'GST Returns' },
     incometax: { icon: Calculator, label: 'Income Tax' },
     // v1.10.75 - opens the online documentation, which covers every screen
@@ -917,6 +931,7 @@ function App() {
           {topActions}
       </div>
       {navOpen && <div className="sidebar-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+<<<<<<< HEAD
       <div className={`sidebar${navOpen ? ' sidebar-open' : ''}`} onClick={closeNavAfterPick}>
         <div className="sidebar-brand">
           <div className={`sidebar-logo${ownBrand && brand.logo ? ' sidebar-logo-own' : ''}`}>
@@ -942,23 +957,47 @@ function App() {
 
         <div className="profile-switcher" ref={profileMenuRef} style={{ position: 'relative' }}>
           <div className="profile-switcher-row">
+=======
+      <div className={`sidebar erp-sidebar${navOpen ? ' sidebar-open' : ''}`} onClick={closeNavAfterPick}>
+        {/* Company Switcher Card at Top of Sidebar (Stitch Mockup) */}
+        <div className="erp-company-card profile-switcher" ref={profileMenuRef}>
+          <div className="erp-company-top">
+            <div className="erp-company-avatar">
+              {(() => {
+                const bName = String(profile?.businessName || 'PRAGYAN ENTERPRISE').trim();
+                const words = bName.split(/\s+/).filter(Boolean);
+                return words.length >= 2
+                  ? (words[0][0] + words[1][0]).toUpperCase()
+                  : bName.slice(0, 2).toUpperCase();
+              })()}
+            </div>
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
             <button
-              className="profile-switcher-btn"
-              onClick={() => allProfiles.length > 1 && setShowProfileMenu(v => !v)}
-              title={allProfiles.length > 1 ? 'Switch business profile' : profile?.businessName || 'My Business'}
-              style={{ cursor: allProfiles.length > 1 ? 'pointer' : 'default' }}
+              type="button"
+              className="erp-company-name-btn profile-switcher-btn"
+              onClick={() => allProfiles.length > 1 ? setShowProfileMenu(v => !v) : setCurrentView('settings')}
+              title={allProfiles.length > 1 ? 'Switch business profile' : (profile?.businessName || 'PRAGYAN ENTERPRISE')}
             >
-              <Building2 size={14} />
-              <span className="profile-switcher-name">{profile?.businessName || 'My Business'}</span>
-              {allProfiles.length > 1 && <ChevronDown size={13} style={{ marginLeft: 'auto', opacity: 0.6 }} />}
+              <span>{profile?.businessName || 'PRAGYAN ENTERPRISE'}</span>
+              <ChevronDown size={13} style={{ opacity: 0.65, flexShrink: 0 }} />
             </button>
             <button
+              type="button"
               className="profile-switcher-edit"
               onClick={() => { setShowProfileMenu(false); setCurrentView('settings'); }}
               title="Edit business profile"
+              style={{ width: 24, height: 24, padding: 0 }}
             >
-              <Pencil size={13} />
+              <Pencil size={12} />
             </button>
+          </div>
+          <div className="erp-company-gstin-row">
+            <span className="erp-company-gstin">GSTIN: {profile?.gstin || '08AAPCP9871P1ZT'}</span>
+            <span className="erp-city-pill">{profile?.city || profile?.state || 'JAIPUR'}</span>
+          </div>
+          <div className="erp-company-meta-row">
+            <span className="erp-branch-dot">Main Branch</span>
+            <span>FY 2026-27</span>
           </div>
           {showProfileMenu && (
             <div className="profile-switcher-menu">
@@ -981,7 +1020,10 @@ function App() {
           )}
         </div>
 
+        <div className="erp-nav-section-label">OPERATIONS CORE</div>
+
         <nav className="sidebar-nav">
+<<<<<<< HEAD
           <span className="workspace-nav-label">Workspace</span>
           {navItems.map(item => (
             <button
@@ -999,6 +1041,51 @@ function App() {
             {/* Update-available banner — only shows when GitHub has a newer version
                 AND the user hasn't already dismissed THIS specific version. New
                 releases re-show the banner. Click to view notes + update. */}
+=======
+          {navItems.map(item => {
+            const isActive = currentView === item.id;
+            return (
+              <ReactFragment key={item.id}>
+                <button
+                  data-nav-id={item.id}
+                  className={`nav-btn ${isActive ? 'nav-btn-active' : ''}`}
+                  onClick={item.onClick || (() => setCurrentView(item.id))}
+                >
+                  <item.icon size={17} />
+                  <span>{item.label}</span>
+                  {item.id === 'new' && !isActive && <span className="erp-nav-badge-plus">+</span>}
+                  {item.id === 'filing' && <span className="erp-nav-badge-pill">GSTR 1/3B</span>}
+                  {isActive && item.id !== 'filing' && <span className="erp-nav-active-dot" />}
+                </button>
+                {item.id === 'clients' && (
+                  <button
+                    type="button"
+                    className="nav-btn"
+                    onClick={handleNewInvoice}
+                    title="Fast Counter POS Billing"
+                  >
+                    <Store size={17} />
+                    <span>POS Counter</span>
+                    <span className="erp-nav-badge-fast">FAST</span>
+                  </button>
+                )}
+                {item.id === 'inventory' && (
+                  <button
+                    type="button"
+                    className="nav-btn"
+                    onClick={() => setCurrentView('cashbook')}
+                    title="Open Accounting & Ledgers"
+                  >
+                    <Landmark size={17} />
+                    <span>Accounting &amp; Ledgers</span>
+                  </button>
+                )}
+              </ReactFragment>
+            );
+          })}
+
+          <div className="erp-sidebar-footer">
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
             {updateBannerVisible && (
               <button
                 className="nav-btn"
@@ -1012,62 +1099,64 @@ function App() {
                   position: 'relative',
                 }}
               >
-                <Download size={18} />
+                <Download size={16} />
                 <span style={{ flex: 1, textAlign: 'left' }}>
                   Update to v{updateInfo.latest}
                 </span>
-                <span style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: '#f59e0b', boxShadow: '0 0 0 3px rgba(245,158,11,0.25)',
-                  flexShrink: 0,
-                }} />
               </button>
             )}
-            {/* v1.10.83 - in the order chosen in Settings → Features; switched-off
-                ones are already left out of bottomIds. */}
-            {bottomIds.map(id => ({
-              support: (
-                <button key={id}
-                  className={`nav-btn nav-btn-support${currentView === 'support' ? ' nav-btn-support-active' : ''}`}
-                  onClick={() => setCurrentView('support')}
-                  title="Who makes this app, and how to help"
-                >
-                  <Heart size={18} /> Support &amp; About
-                </button>
-              ),
-              controlpanel: (
-                <button key={id}
-                  className={`nav-btn ${currentView === 'controlpanel' ? 'nav-btn-active' : ''}`}
+
+            <button
+              type="button"
+              className="erp-busy-sync-pill"
+              onClick={() => setCurrentView('controlpanel')}
+              title="BUSY .DAT Sync & Local Data Bridge"
+            >
+              <ArrowRightLeft size={14} style={{ color: '#059669', flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>BUSY .DAT Sync</span>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#16a34a', flexShrink: 0 }} />
+            </button>
+
+            <div className="erp-port-row">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span className={`server-status-dot server-status-${serverStatus}`} style={{ marginLeft: 0, width: 7, height: 7 }} />
+                <span>{serverStatus === 'online' ? 'Online: Port 47372' : serverStatus === 'offline' ? 'Offline' : 'Connecting...'}</span>
+              </span>
+              {bottomIds.includes('controlpanel') && (
+                <button
+                  type="button"
+                  className="icon-btn"
                   onClick={() => setCurrentView('controlpanel')}
-                  title={`${serverStatus === 'online' ? 'App Ready' : serverStatus === 'offline' ? 'App Not Running' : 'Connecting...'} - update, backup, restore, move to another PC`}
+                  title="Open Control Panel — update, backup, restore, move to another PC"
+                  style={{ padding: 3 }}
                 >
-                  <HardDrive size={18} /> Control Panel
-                  {/* v1.10.83 - the app's status dot, formerly the "App Ready" box under the menu. */}
-                  <span className={`server-status-dot server-status-${serverStatus}`} aria-label={serverStatus === 'online' ? 'App Ready' : serverStatus === 'offline' ? 'App Not Running' : 'Connecting'} />
+                  <HardDrive size={14} />
                 </button>
-              ),
-              settings: (
-                <button key={id}
-                  className={`nav-btn ${currentView === 'settings' ? 'nav-btn-active' : ''}`}
-                  onClick={() => setCurrentView('settings')}
-                  style={updateBannerVisible ? { position: 'relative' } : undefined}
-                >
-                  <Settings size={18} /> Settings
-                  {updateBannerVisible && (
-                    <span className="nav-badge" style={{
-                      position: 'absolute', top: '8px', right: '12px',
-                      width: 8, height: 8, borderRadius: '50%',
-                      background: '#f59e0b',
-                    }} title="Update available" />
-                  )}
-                </button>
-              ),
-            })[id])}
+              )}
+            </div>
+
+            <div className="erp-bottom-links">
+              <button
+                type="button"
+                className={`erp-bottom-link-btn${currentView === 'settings' ? ' active' : ''}`}
+                onClick={() => setCurrentView('settings')}
+              >
+                <Settings size={15} /> Settings
+              </button>
+              <button
+                type="button"
+                className={`erp-bottom-link-btn${currentView === 'support' ? ' active' : ''}`}
+                onClick={() => setCurrentView('support')}
+              >
+                <HelpCircle size={15} /> Support
+              </button>
+            </div>
           </div>
         </nav>
       </div>
 
       <div className="main-content">
+<<<<<<< HEAD
         <div className="app-topbar workspace-topbar">
           <div className="workspace-location"><span>AUTO-GST</span><span aria-hidden="true">/</span><strong>{pageLabel || 'Workspace'}</strong></div>
           <button type="button" className="workspace-search" aria-keyshortcuts="Control+K Meta+K" onClick={() => {
@@ -1078,6 +1167,68 @@ function App() {
           <span className="topbar-free" title="Free forever: no paid version, no locked features, no ads, no tracking. Works on this computer, even offline.">Free forever</span>
           <button type="button" className="topbar-btn" onClick={() => setShowShortcutsHelp(true)} title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts"><Command size={18} /></button>
           {topActions}
+=======
+        <div className="app-topbar erp-topbar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', minWidth: 0, flex: 1 }}>
+            <div className="erp-topbar-brand">
+              <button
+                type="button"
+                className={`sidebar-autohide-toggle${sidebarAutoHide ? ' on' : ''}`}
+                aria-pressed={sidebarAutoHide}
+                aria-label="Auto-hide menu"
+                title={sidebarAutoHide ? 'Keep menu open' : 'Auto-hide menu'}
+                onClick={(e) => { e.stopPropagation(); toggleSidebarAutoHide(!sidebarAutoHide); }}
+                style={{ marginLeft: 0, width: 30, height: 30, color: 'var(--text-secondary)' }}
+              >
+                <Menu size={16} />
+              </button>
+              <span className="erp-topbar-logo-box">
+                {ownBrand && brand.logo ? <img src={brand.logo} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : 'img'}
+              </span>
+              <span>{ownBrand ? brand.businessName : 'Apex AutoERP'}</span>
+            </div>
+
+            <button
+              type="button"
+              className="erp-topbar-search"
+              onClick={() => { setShowPalette(true); setPaletteQuery(''); setPaletteIdx(0); }}
+              title="Global search across invoices, parts, OEM codes, and clients (Ctrl+K)"
+            >
+              <Search size={15} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Search part no., OEM code, invoice...</span>
+              <kbd>Ctrl+K</kbd>
+            </button>
+          </div>
+
+          <div className="erp-topbar-right">
+            <span className="erp-pill-badge" title="Free forever: no paid version, no locked features, no ads, no tracking. Works on this computer, even offline.">
+              <ShieldCheck size={14} style={{ color: '#1d4ed8' }} />
+              Enterprise Licensed
+            </span>
+            <span className="erp-pill-badge" title={serverStatus === 'online' ? 'Connected to local storage engine' : 'Checking local storage'}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: serverStatus === 'online' ? '#16a34a' : '#f59e0b' }} />
+              Synced with Win32
+            </span>
+            <button type="button" className="erp-quick-sale-btn" onClick={handleNewInvoice}>
+              <Plus size={15} /> Quick Sale
+            </button>
+            <button type="button" className="topbar-btn" onClick={() => setShowShortcutsHelp(true)} title="Keyboard shortcuts (F1)" aria-label="Keyboard shortcuts"><Command size={17} /></button>
+            {topActions}
+            <button
+              type="button"
+              className="erp-user-pill"
+              onClick={() => setCurrentView('settings')}
+              title="Open Company & Account Settings"
+            >
+              <div className="erp-user-avatar">RS</div>
+              <div style={{ lineHeight: 1.15 }}>
+                <div style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-primary)' }}>Rajesh Sharma</div>
+                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Admin / Partner</div>
+              </div>
+              <ChevronDown size={13} style={{ color: 'var(--text-muted)' }} />
+            </button>
+          </div>
+>>>>>>> 8519e8f3898a61f86966b1219ad53110b3055440
         </div>
         {/* v1.10.83 - a screen that throws shows "ran into a problem" here
             instead of blanking the app; keyed by screen so the sidebar works
@@ -1085,7 +1236,7 @@ function App() {
         <ErrorBoundary key={currentView} onHome={() => setCurrentView('dashboard')}>
         {currentView !== 'new' && <StarBanner />}
         {currentView === 'dashboard' && (
-          <Dashboard onNew={handleNewInvoice} onEdit={handleEditInvoice} onPrint={handlePrintInvoice} onDuplicate={handleDuplicateInvoice} onConvert={handleConvertToInvoice} onOpenProducts={() => setCurrentView('inventory')} onOpenSettings={() => setCurrentView('settings')} onOpenGuide={openDocs} onOpenSupport={() => setCurrentView('support')} activeProfile={profile} />
+          <Dashboard onNew={handleNewInvoice} onEdit={handleEditInvoice} onPrint={handlePrintInvoice} onDuplicate={handleDuplicateInvoice} onConvert={handleConvertToInvoice} onOpenProducts={() => setCurrentView('inventory')} onOpenSettings={() => setCurrentView('settings')} onOpenGuide={openDocs} onOpenSupport={() => setCurrentView('support')} onOpenFiling={() => setCurrentView('filing')} activeProfile={profile} />
         )}
         {currentView === 'new' && (
           <InvoiceGenerator

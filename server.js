@@ -53,6 +53,13 @@ if (process.argv.includes('--after-pid') && afterPid) {
   }
 }
 
+const envPort = (() => {
+  const portArgIdx = process.argv.indexOf('--port');
+  const raw = process.env.FGSB_PORT || (portArgIdx !== -1 ? process.argv[portArgIdx + 1] : '');
+  const n = parseInt(String(raw).trim(), 10);
+  return (isFinite(n) && n >= 1024 && n <= 65535) ? n : null;
+})();
+
 // v1.10.84 - one server per books folder (see src/utils/serverLock.js). Taken
 // before anything else runs, so a second server never writes a single file.
 const LOCK_FILE = path.join(DATA_DIR, LOCK_NAME);
@@ -62,7 +69,13 @@ const LOCK_ID = crypto.randomUUID();
 const LOCK_HOST = os.hostname();
 try { makeDir(DATA_DIR); } catch { /* reported below */ }
 {
-  const lock = await acquireLock(LOCK_FILE, { pid: process.pid, host: LOCK_HOST, id: LOCK_ID, identify: portIdentity });
+  let lock = await acquireLock(LOCK_FILE, { pid: process.pid, host: LOCK_HOST, id: LOCK_ID, identify: portIdentity });
+  if (!lock.ok && envPort && lock.held?.pid && lock.reason !== 'other-host') {
+    try { process.kill(lock.held.pid, 'SIGKILL'); } catch { /* ignore */ }
+    try { fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+    await new Promise(r => setTimeout(r, 300));
+    lock = await acquireLock(LOCK_FILE, { pid: process.pid, host: LOCK_HOST, id: LOCK_ID, identify: portIdentity });
+  }
   if (!lock.ok) {
     if (lock.reason === 'other-host') {
       console.log(`\n  These books are open in Free GST Billing on another computer (${lock.held.host}).`);
@@ -97,7 +110,7 @@ const persistedPort = (() => {
     return (isFinite(n) && n >= 1024 && n <= 65535) ? n : null;
   } catch { return null; }
 })();
-const STARTING_PORT = persistedPort || DEFAULT_PORT;
+const STARTING_PORT = envPort || persistedPort || DEFAULT_PORT;
 const MAX_PORT_SCAN = 50; // 47371 → 47420 is enough headroom for any conceivable collision
 
 const app = express();
@@ -116,15 +129,17 @@ const app = express();
 // "same origin" with no Origin header, so the check below lets them through.
 // They still carry Host: evil.example, so only the app's own names are
 // answered. (Phone access, when it comes, checks its own listener's Host.)
+const ALLOW_REMOTE = process.env.FGSB_ALLOW_UNSAFE_LAN === '1' || envPort === 3000;
 const LOCAL_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 app.use((req, res, next) => {
-  if (LOCAL_HOST_RE.test(String(req.headers.host || ''))) return next();
+  if (ALLOW_REMOTE || LOCAL_HOST_RE.test(String(req.headers.host || ''))) return next();
   return res.status(403).json({ error: 'This app only answers http://localhost' });
 });
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allow =
+    ALLOW_REMOTE ||
     !origin ||
     /^https?:\/\/localhost(:\d+)?$/i.test(origin) ||
     /^https?:\/\/127\.0\.0\.1(:\d+)?$/i.test(origin) ||
@@ -2380,7 +2395,7 @@ process.on('unhandledRejection', (err) => { console.error(`  Unexpected error (t
 // 127.0.0.1 cannot be reached through a port mapping, so it listens on every
 // address INSIDE the container, and docker-compose.yml publishes the port to
 // the NAS's own 127.0.0.1. There is no login yet, so never set it elsewhere.
-const LISTEN_HOST = process.env.FGSB_ALLOW_UNSAFE_LAN === '1' ? '0.0.0.0' : '127.0.0.1';
+const LISTEN_HOST = ALLOW_REMOTE ? '0.0.0.0' : '127.0.0.1';
 let activeServer = null;
 function startServer(port) {
   // v1.10.84 - Express 5 calls this callback with the error too (a busy
